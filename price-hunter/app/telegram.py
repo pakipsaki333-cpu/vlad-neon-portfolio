@@ -1,0 +1,97 @@
+"""Telegram alerts via Bot API (no libraries, plain HTTPS).
+
+Setup (2 minutes):
+  1. In Telegram open @BotFather -> /newbot -> copy the token.
+  2. Write any message to your new bot.
+  3. Get your chat id: open @userinfobot, or call
+     https://api.telegram.org/bot<TOKEN>/getUpdates and read message.chat.id
+  4. Paste token + chat id in the web panel (Настройки) -> Тест.
+"""
+from __future__ import annotations
+
+import html
+import logging
+
+import httpx
+
+log = logging.getLogger("telegram")
+
+_LEVEL_ICON = {"FIRE": "🔥🔥 ЦЕНОВАЯ ОШИБКА", "HOT": "🔥 РЕЗКОЕ ПАДЕНИЕ",
+               "WATCH": "👀 Подозрительно дёшево"}
+
+
+def fmt_rub(v: float) -> str:
+    return f"{v:,.0f}".replace(",", " ") + " ₽"
+
+
+def alert_text(a: dict) -> str:
+    lines = [
+        f"<b>{_LEVEL_ICON.get(a['level'], a['level'])}</b>  ·  скор {a['score']}/100",
+        f"<b>{html.escape(a['brand'])} — {html.escape(a['name'])}</b>",
+        "",
+        f"💰 <b>{fmt_rub(a['sale_price_rub'])}</b> вместо "
+        f"<s>{fmt_rub(a['price_rub'])}</s>  (<b>−{a['discount_pct']:.0f}%</b>)",
+        f"💸 Выгода: <b>{fmt_rub(a['saving'])}</b>",
+    ]
+    if a.get("drop_vs_median_pct") and a.get("hist_median"):
+        lines.append(
+            f"📉 На {a['drop_vs_median_pct']:.0f}% ниже медианы истории "
+            f"({fmt_rub(a['hist_median'])})")
+    if a.get("reasons"):
+        lines.append("")
+        lines += [f"• {html.escape(r)}" for r in a["reasons"]]
+    lines += [
+        "",
+        f"Артикул: <code>{a['nm']}</code>",
+        f"🛒 <a href=\"{a['url']}\">ОТКРЫТЬ И КУПИТЬ</a>",
+        "⏱ Такие цены живут минуты. Действуй быстро, но проверь "
+        "продавца и размер/комплектацию.",
+    ]
+    if a.get("source") == "demo":
+        lines.append("\n<i>⚠ DEMO-режим: данные сгенерированы, товар вымышлен.</i>")
+    return "\n".join(lines)
+
+
+class TelegramNotifier:
+    def __init__(self, token: str, chat_id: str):
+        self.token = (token or "").strip()
+        self.chat_id = (chat_id or "").strip()
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.token and self.chat_id)
+
+    def _post(self, method: str, payload: dict) -> bool:
+        try:
+            r = httpx.post(
+                f"https://api.telegram.org/bot{self.token}/{method}",
+                json=payload, timeout=20)
+            if r.status_code == 200 and r.json().get("ok"):
+                return True
+            log.warning("Telegram %s failed: %s %s", method, r.status_code, r.text[:300])
+        except Exception as e:
+            log.warning("Telegram %s error: %s", method, e)
+        return False
+
+    def send_alert(self, a: dict) -> bool:
+        if not self.configured:
+            return False
+        text = alert_text(a)
+        # Try with photo first; fall back to plain text (photo URL may 404).
+        if a.get("photo") and self._post("sendPhoto", {
+            "chat_id": self.chat_id, "photo": a["photo"], "caption": text[:1024],
+            "parse_mode": "HTML",
+        }):
+            return True
+        return self._post("sendMessage", {
+            "chat_id": self.chat_id, "text": text, "parse_mode": "HTML",
+            "disable_web_page_preview": False,
+        })
+
+    def send_test(self) -> bool:
+        return self._post("sendMessage", {
+            "chat_id": self.chat_id, "parse_mode": "HTML",
+            "text": "✅ <b>Price Hunter на связи.</b>\n"
+                    "Сюда будут падать ценовые ошибки WB. "
+                    "Держи телефон под рукой — такие цены живут минуты.",
+        })
