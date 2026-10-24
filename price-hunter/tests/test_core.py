@@ -91,16 +91,19 @@ class NormalizeTest(unittest.TestCase):
 
 class DBTest(unittest.TestCase):
     def test_history_stats(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
             dbt = DB(Path(d) / "t.db")
-            for sale in (1000.0, 1100.0, 900.0):
-                p = prod(2000.0, sale, nm=777)
-                p.update(photo="", url="")
-                dbt.upsert_product(p)
-            stats = dbt.history_stats(777, exclude_latest_minutes=0)
-            self.assertEqual(stats["count"], 3)
-            self.assertEqual(stats["median"], 1000.0)
-            self.assertEqual(stats["prev"], 900.0)  # latest by time, not max
+            try:
+                for sale in (1000.0, 1100.0, 900.0):
+                    p = prod(2000.0, sale, nm=777)
+                    p.update(photo="", url="")
+                    dbt.upsert_product(p)
+                stats = dbt.history_stats(777, exclude_latest_minutes=0)
+                self.assertEqual(stats["count"], 3)
+                self.assertEqual(stats["median"], 1000.0)
+                self.assertEqual(stats["prev"], 900.0)  # latest by time, not max
+            finally:
+                dbt.close()  # Windows locks open SQLite files
 
 
 class TelegramTest(unittest.TestCase):

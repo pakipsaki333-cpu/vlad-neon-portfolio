@@ -122,6 +122,7 @@ class DesktopController:
 
     def shutdown(self) -> None:
         self.scanner.stop()
+        self.db.close()
 
     # --- data for the GUI -------------------------------------------- #
     def status(self) -> dict:

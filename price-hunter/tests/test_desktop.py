@@ -76,7 +76,7 @@ class AutostartTest(unittest.TestCase):
 
 class ControllerTest(unittest.TestCase):
     def test_demo_scan_end_to_end(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
             ctrl = DesktopController(settings=Settings(),
                                      db=DB(Path(d) / "t.db"))
             ctrl.scanner.effective_mode = "demo"
@@ -87,7 +87,7 @@ class ControllerTest(unittest.TestCase):
             ctrl.shutdown()
 
     def test_telegram_test_not_configured(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
             ctrl = DesktopController(settings=Settings(),
                                      db=DB(Path(d) / "t.db"))
             ok, msg = ctrl.telegram_test("", "")

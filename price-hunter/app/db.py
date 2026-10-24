@@ -59,6 +59,15 @@ class DB:
             self._conn.executescript(_SCHEMA)
             self._conn.commit()
 
+    def close(self) -> None:
+        """Close the SQLite handle. On Windows an open handle locks the
+        .db file (breaks temp-dir cleanup in tests and db file moves)."""
+        with self._lock:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+
     # ------------------------------------------------------------------ #
     def upsert_product(self, p: dict[str, Any]) -> bool:
         """Insert/update product + append snapshot. Returns True if new."""
