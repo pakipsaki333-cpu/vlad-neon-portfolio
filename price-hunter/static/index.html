@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Price Hunter — охотник за ценовыми ошибками WB</title>
+<style>
+:root{--bg:#070812;--panel:#101024;--panel2:#16162e;--neon:#00f0ff;--pink:#ff2e88;--green:#2bff88;--amber:#ffb02e;--text:#eef0ff;--mut:#8b8fb3;--line:#26264a}
+*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:radial-gradient(1000px 500px at 80% -10%,#24104a 0,transparent 60%),radial-gradient(800px 400px at 0 0,#00313d 0,transparent 55%),var(--bg);color:var(--text)}
+a{color:var(--neon)}button{cursor:pointer;border:0;border-radius:10px;padding:9px 16px;font-weight:700;font-size:14px}
+.btn{background:linear-gradient(90deg,#00c2ff,#7b2bff);color:#fff;box-shadow:0 0 18px rgba(0,240,255,.35)}
+.btn2{background:var(--panel2);color:var(--text);border:1px solid var(--line)}
+.btn-buy{background:linear-gradient(90deg,#ff2e88,#ff7a2e);color:#fff;text-decoration:none;padding:10px 18px;border-radius:10px;font-weight:800;display:inline-block;box-shadow:0 0 18px rgba(255,46,136,.45)}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:18px 24px;border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(7,8,18,.92);backdrop-filter:blur(8px);z-index:5}
+.logo{font-size:24px;font-weight:900;letter-spacing:.5px}.logo span{color:var(--neon);text-shadow:0 0 14px var(--neon)}
+.badge{padding:5px 12px;border-radius:99px;font-size:12px;font-weight:800;letter-spacing:.6px}
+.live{background:rgba(43,255,136,.15);color:var(--green);border:1px solid var(--green)}
+.demo{background:rgba(255,176,46,.15);color:var(--amber);border:1px solid var(--amber)}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green);animation:p 1.4s infinite;margin-right:6px}
+.dot.off{background:#666;box-shadow:none;animation:none}@keyframes p{50%{opacity:.35}}
+.banner{margin:16px 24px 0;padding:12px 18px;border-radius:12px;background:rgba(255,176,46,.1);border:1px solid rgba(255,176,46,.5);color:#ffd98a;font-size:14px;line-height:1.5}
+main{max-width:1280px;margin:0 auto;padding:20px 24px 60px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:22px}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px}
+.kpi b{display:block;font-size:28px;margin-top:4px}.kpi small{color:var(--mut);font-weight:700;text-transform:uppercase;font-size:11px;letter-spacing:.7px}
+h2{margin:26px 0 12px;font-size:20px}
+.card{display:grid;grid-template-columns:118px 1fr auto;gap:16px;background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:16px;margin-bottom:12px;align-items:center}
+.card.FIRE{border-color:var(--pink);box-shadow:0 0 22px rgba(255,46,136,.28)}
+.card.HOT{border-color:rgba(255,176,46,.7)}
+.ph{width:118px;height:138px;border-radius:12px;object-fit:cover;background:linear-gradient(135deg,#1d1d3d,#33124f);display:flex;align-items:center;justify-content:center;font-size:46px}
+img.ph{display:block}.price{font-size:26px;font-weight:900;color:var(--green)}.old{color:var(--mut);text-decoration:line-through;margin-left:8px;font-size:17px}
+.disc{background:var(--pink);color:#fff;font-weight:900;border-radius:8px;padding:3px 9px;margin-left:8px}
+.tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.tag{font-size:12px;background:var(--panel2);border:1px solid var(--line);border-radius:99px;padding:4px 10px;color:#c9cdf5}
+.score{height:8px;background:#23233f;border-radius:99px;margin-top:10px;max-width:360px}.score i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--neon),var(--pink))}
+.mut{color:var(--mut);font-size:13px}.right{text-align:right;display:flex;flex-direction:column;gap:8px;align-items:flex-end}
+table{width:100%;border-collapse:collapse;background:var(--panel);border-radius:14px;overflow:hidden;font-size:13px}
+th,td{padding:9px 12px;border-bottom:1px solid var(--line);text-align:left}th{color:var(--mut)}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:flex-start;justify-content:center;padding:26px 12px;z-index:10;overflow:auto}
+.modal.open{display:flex}.sheet{background:var(--panel);border:1px solid var(--line);border-radius:18px;max-width:680px;width:100%;padding:24px}
+label{display:block;font-size:13px;color:var(--mut);margin:14px 0 5px;font-weight:700}
+input,select,textarea{width:100%;background:#0b0b1c;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px;font-size:14px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}.empty{padding:36px;text-align:center;color:var(--mut);background:var(--panel);border:1px dashed var(--line);border-radius:16px}
+canvas.hist{width:100%;height:120px;background:#0b0b1c;border-radius:10px;margin-top:10px}
+@media(max-width:760px){.card{grid-template-columns:84px 1fr}.right{grid-column:1/-1;align-items:stretch;text-align:left}.ph{width:84px;height:100px}}
+</style></head><body>
+<header>
+ <div class="logo">🎯 PRICE <span>HUNTER</span></div>
+ <span id="modeBadge" class="badge demo">…</span>
+ <span id="runState" class="mut"></span>
+ <span style="flex:1"></span>
+ <button class="btn" id="btnNow">⚡ Сканировать сейчас</button>
+ <button class="btn2" id="btnToggle">⏸ Пауза</button>
+ <button class="btn2" id="btnSettings">⚙️ Настройки</button>
+</header>
+<div id="demoBanner" class="banner" style="display:none">⚠ <b>DEMO-режим.</b> Из этой песочницы WB по сети недоступен, поэтому падения ниже — честная симуляция механизма (товары вымышлены, помечены DEMO). У тебя на ПК тот же код в режиме <b>auto/live</b> ходит в настоящий API Wildberries. См. README.</div>
+<main>
+ <div class="kpis">
+  <div class="kpi"><small>Товаров в базе</small><b id="kProducts">—</b></div>
+  <div class="kpi"><small>Находок за 24ч</small><b id="kAlerts">—</b></div>
+  <div class="kpi"><small>Лучшая скидка 24ч</small><b id="kBest">—</b></div>
+  <div class="kpi"><small>Потенциальная выгода 24ч</small><b id="kSaving">—</b></div>
+  <div class="kpi"><small>Сканирований</small><b id="kScans">—</b></div>
+  <div class="kpi"><small>Снапшотов цен</small><b id="kSnaps">—</b></div>
+ </div>
+ <h2>🔥 Находки <span class="mut" style="font-size:14px">— сортировка по свежести. Красная рамка = вероятная ошибка цены, действовать немедленно.</span></h2>
+ <div id="feed"><div class="empty">Сканируем WB… Первая находка появится после первого прохода. В LIVE-режиме детектор точнее с каждым часом — он накапливает историю цен и отличает настоящие падения от фейковых «скидок» продавцов.</div></div>
+ <h2>🧾 Журнал сканирований</h2>
+ <table><thead><tr><th>Время</th><th>Режим</th><th>Запросов</th><th>Проверено</th><th>Новых</th><th>Находок</th><th>Ошибка</th></tr></thead><tbody id="runs"></tbody></table>
+ <h2>📦 Последние увиденные товары</h2>
+ <table><thead><tr><th>Артикул</th><th>Товар</th><th>Бренд</th><th>Цена</th><th>Со скидкой</th><th>Скидка</th></tr></thead><tbody id="products"></tbody></table>
+</main>
+
+<div class="modal" id="settingsModal"><div class="sheet">
+ <h2 style="margin-top:0">⚙️ Настройки охотника</h2>
+ <label>Режим (auto = живой WB, если недоступен — demo)</label>
+ <select id="sMode"><option value="auto">auto</option><option value="live">live — только настоящий WB</option><option value="demo">demo — симуляция</option></select>
+ <label>Поисковые запросы (каждый с новой строки) — выбирай ликвидные категории, где ошибку легко перепродать/использовать</label>
+ <textarea id="sQueries" rows="7"></textarea>
+ <div class="grid2">
+  <div><label>Интервал сканирования, сек (минимум 60)</label><input id="sInterval" type="number"></div>
+  <div><label>Страниц на запрос</label><input id="sPages" type="number"></div>
+  <div><label>Мин. скидка по карточке, %</label><input id="sMinDisc" type="number"></div>
+  <div><label>Мин. падение vs истории, %</label><input id="sMinDrop" type="number"></div>
+  <div><label>Мин. исходная цена, ₽</label><input id="sMinPrice" type="number"></div>
+  <div><label>Мин. выгода, ₽</label><input id="sMinSaving" type="number"></div>
+ </div>
+ <h3>✈️ Telegram</h3>
+ <p class="mut">1) @BotFather → /newbot → токен. 2) Напиши боту /start. 3) Chat id: @userinfobot. Инструкция целиком — в README.</p>
+ <label>Токен бота <span id="tokHint"></span></label><input id="sTgToken" type="password" placeholder="123456:AA… (пусто = не менять)">
+ <label>Chat ID</label><input id="sTgChat" placeholder="например 123456789">
+ <div style="display:flex;gap:10px;margin-top:20px;flex-wrap:wrap">
+  <button class="btn" id="btnSave">💾 Сохранить</button>
+  <button class="btn2" id="btnTgTest">✈️ Тест Telegram</button>
+  <button class="btn2" id="btnClose">Закрыть</button>
+  <span id="setMsg" class="mut"></span>
+ </div>
+</div></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const fmt=v=>Math.round(v).toLocaleString('ru-RU')+' ₽';
+const ago=ts=>{const s=Date.now()/1000-ts;if(s<60)return'только что';if(s<3600)return Math.floor(s/60)+' мин назад';if(s<86400)return Math.floor(s/3600)+' ч назад';return Math.floor(s/86400)+' д назад'};
+let lastTopId=0, running=true;
+function beep(){try{const c=new (window.AudioContext||webkitAudioContext)();const o=c.createOscillator(),g=c.createGain();o.frequency.value=880;o.connect(g);g.connect(c.destination);g.gain.setValueAtTime(.15,c.currentTime);o.start();o.stop(c.currentTime+.35)}catch(e){}}
+async function j(url,opt){const r=await fetch(url,opt);if(!r.ok)throw new Error((await r.text()).slice(0,300));return r.json()}
+function photo(a){return a.photo?`<img class="ph" src="${a.photo}" loading="lazy" onerror="this.outerHTML='<div class=ph>📦</div>'">`:'<div class="ph">📦</div>'}
+async function refresh(){
+ try{
+  const st=await j('/api/status'); running=st.running;
+  const mode=st.effective_mode||st.mode; $('modeBadge').textContent=mode.toUpperCase()+(mode==='demo'?' · симуляция':' · Wildberries');
+  $('modeBadge').className='badge '+(mode==='live'?'live':'demo'); $('demoBanner').style.display=mode==='demo'?'block':'none';
+  $('runState').innerHTML=`<span class="dot ${running?'':'off'}"></span>${st.scanning?'сканирую…':running?(st.next_scan_ts?('след. проход через '+Math.max(0,st.next_scan_ts-Math.floor(Date.now()/1000))+' с'):'работает'):'на паузе'}`;
+  $('btnToggle').textContent=running?'⏸ Пауза':'▶️ Запуск';
+  const s=st.stats; $('kProducts').textContent=s.products_seen;$('kAlerts').textContent=s.alerts_today;$('kBest').textContent='−'+Math.round(s.best_discount_today)+'%';$('kSaving').textContent=fmt(s.potential_saving_today);$('kScans').textContent=s.scans_total;$('kSnaps').textContent=s.snapshots;
+  const {alerts}=await j('/api/alerts?limit=60');
+  if(alerts.length&&alerts[0].id>lastTopId){if(lastTopId)beep();lastTopId=alerts[0].id}
+  $('feed').innerHTML=alerts.length?alerts.map(a=>`<div class="card ${a.level}">
+    ${photo(a)}
+    <div><div class="mut">${a.level==='FIRE'?'🔥🔥 ЦЕНОВАЯ ОШИБКА':a.level==='HOT'?'🔥 Резкое падение':'👀 Подозрительно дёшево'} · ${ago(a.ts)} · арт. <a href="${a.url}" target="_blank">${a.nm}</a> ${a.source==='demo'?'<span class="badge demo">DEMO</span>':''} ${a.telegram_sent?'✈️ отправлено':''}</div>
+    <div style="font-weight:800;margin:3px 0">${a.brand||''} — ${a.name||''}</div>
+    <div><span class="price">${fmt(a.sale_price)}</span><span class="old">${fmt(a.price)}</span><span class="disc">−${Math.round(a.discount_pct)}%</span></div>
+    <div class="mut">Выгода ${fmt(a.saving)}${a.drop_vs_median_pct?` · на ${Math.round(a.drop_vs_median_pct)}% ниже медианы истории (${fmt(a.hist_median)})`:''} · скор ${a.score}/100</div>
+    <div class="score"><i style="width:${a.score}%"></i></div>
+    <div class="tags">${(a.reasons||[]).map(r=>`<span class="tag">${r}</span>`).join('')}</div>
+    <div id="hist-${a.id}"></div></div>
+    <div class="right"><a class="btn-buy" href="${a.url}" target="_blank">🛒 КУПИТЬ</a>
+    <button class="btn2" onclick="showHist(${a.nm},${a.id})">📉 История цены</button>
+    <button class="btn2" onclick="dismissA(${a.id})">Скрыть</button></div></div>`).join(''):$('feed').innerHTML;
+  const {runs}=await j('/api/runs?limit=10');
+  $('runs').innerHTML=runs.map(r=>`<tr><td>${new Date(r.ts*1000).toLocaleTimeString('ru-RU')}</td><td>${r.source}</td><td>${r.queries}</td><td>${r.scanned}</td><td>${r.new_products}</td><td>${r.alerts}</td><td>${r.error||'—'}</td></tr>`).join('');
+  const {products}=await j('/api/products?limit=25');
+  $('products').innerHTML=products.map(p=>`<tr><td><a href="https://www.wildberries.ru/catalog/${p.nm}/detail.aspx" target="_blank">${p.nm}</a></td><td>${(p.name||'').slice(0,60)}</td><td>${p.brand||''}</td><td>${fmt(p.last_price||0)}</td><td>${fmt(p.last_sale_price||0)}</td><td>${p.last_price?'−'+Math.round((1-p.last_sale_price/p.last_price)*100)+'%':'—'}</td></tr>`).join('');
+ }catch(e){console.warn(e)}
+}
+async function dismissA(id){await j('/api/alerts/'+id+'/dismiss',{method:'POST'});refresh()}
+async function showHist(nm,id){const el=$('hist-'+id);const {history}=await j('/api/product/'+nm+'/history');
+ if(history.length<2){el.innerHTML='<div class="mut">Истории пока мало — нужно несколько сканирований.</div>';return}
+ el.innerHTML='<canvas class="hist" width="640" height="120"></canvas>';const c=el.querySelector('canvas'),x=c.getContext('2d');
+ const ps=history.map(h=>h.sale_price),mn=Math.min(...ps),mx=Math.max(...ps),rg=(mx-mn)||1;
+ x.strokeStyle='#00f0ff';x.lineWidth=2;x.beginPath();history.forEach((h,i)=>{const px=10+i*(620/(history.length-1)),py=105-((h.sale_price-mn)/rg)*90;i?x.lineTo(px,py):x.moveTo(px,py)});x.stroke();
+ x.fillStyle='#8b8fb3';x.font='12px sans-serif';x.fillText('min '+fmt(mn)+' · max '+fmt(mx),10,14)}
+$('btnNow').onclick=async()=>{await j('/api/scan/now',{method:'POST'});setTimeout(refresh,1200)};
+$('btnToggle').onclick=async()=>{await j(running?'/api/scan/stop':'/api/scan/start',{method:'POST'});refresh()};
+$('btnSettings').onclick=async()=>{const s=await j('/api/settings');$('sMode').value=s.mode;$('sQueries').value=(s.queries||[]).join('\n');$('sInterval').value=s.interval_sec;$('sPages').value=s.pages_per_query;$('sMinDisc').value=s.min_discount_pct;$('sMinDrop').value=s.min_drop_vs_history_pct;$('sMinPrice').value=s.min_original_price_rub;$('sMinSaving').value=s.min_saving_rub;$('sTgChat').value=s.telegram_chat_id||'';$('tokHint').textContent=s.telegram_configured?('(уже задан: '+(s.telegram_token_masked||'')+')'):'';$('settingsModal').classList.add('open')};
+$('btnClose').onclick=()=>$('settingsModal').classList.remove('open');
+$('btnSave').onclick=async()=>{const body={mode:$('sMode').value,queries:$('sQueries').value.split('\n').map(x=>x.trim()).filter(Boolean),interval_sec:+$('sInterval').value,pages_per_query:+$('sPages').value,min_discount_pct:+$('sMinDisc').value,min_drop_vs_history_pct:+$('sMinDrop').value,min_original_price_rub:+$('sMinPrice').value,min_saving_rub:+$('sMinSaving').value,telegram_chat_id:$('sTgChat').value.trim(),telegram_token:$('sTgToken').value.trim()};
+ try{await j('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});$('setMsg').textContent='✅ Сохранено';refresh()}catch(e){$('setMsg').textContent='❌ '+e.message}};
+$('btnTgTest').onclick=async()=>{try{await j('/api/telegram/test',{method:'POST'});$('setMsg').textContent='✅ Проверь Telegram'}catch(e){$('setMsg').textContent='❌ '+e.message}};
+refresh();setInterval(refresh,8000);
+</script></body></html>
