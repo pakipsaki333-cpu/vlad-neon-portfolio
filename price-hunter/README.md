@@ -95,12 +95,22 @@ app/
   scanner.py     # фоновый цикл опроса, дедуп алертов, fallback
   db.py          # SQLite: товары, снапшоты цен, алерты, журнал запусков
   telegram.py    # Bot API: алерт с фото, тест
-  config.py      # настройки (data/settings.json + .env)
+  config.py      # настройки (settings.json + .env; папка данных — PRICE_HUNTER_DATA_DIR)
   demo.py        # генератор демо-данных
   ozon_client.py # этап 2 (заготовка)
-  main.py        # FastAPI + панель
-static/index.html  # дашборд: лента находок, графики истории, настройки
+  main.py        # FastAPI + веб-панель
+desktop/
+  gui.py         # окно Tkinter: Главная / Находки / Настройки / Журнал, тосты
+  controller.py  # валидация формы настроек, обёртка над движком (без GUI-зависимостей)
+  tray.py        # иконка в трее (pystray, опционально), уведомления
+  autostart.py   # автозапуск с Windows (HKCU\...\Run)
+desktop_app.py   # точка входа приложения (--minimized / --self-test / --gui-smoke)
+PriceHunter.spec # PyInstaller: один windowed PriceHunter.exe без веб-стека
+build_windows.bat / run_desktop.bat  # сборка exe / запуск приложения из исходников
+assets/icon.ico  # иконка приложения
+static/index.html  # веб-дашборд: лента находок, графики истории, настройки
 tests/             # python -m unittest discover -s tests -v
+.github/workflows/build-windows.yml  # CI: тесты + сборка exe в артефакты
 ```
 
 API: `GET /api/status|alerts|products|runs`, `GET /api/product/{nm}/history`,

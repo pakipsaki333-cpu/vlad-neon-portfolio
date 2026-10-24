@@ -1,5 +1,10 @@
 .venv/
+.venv-build/
 __pycache__/
 data/*.db
+data/*.log
 data/settings.json
 .env
+# PyInstaller output (grab the exe from GitHub Actions artifacts instead)
+dist/
+build/

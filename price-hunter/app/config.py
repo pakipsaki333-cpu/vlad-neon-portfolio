@@ -6,7 +6,10 @@ import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data"
+# Desktop (.exe) build sets PRICE_HUNTER_DATA_DIR to %APPDATA%\PriceHunter
+# BEFORE importing this module: a frozen one-file app unpacks code into a
+# temp dir, so settings/DB must live in a stable per-user location.
+DATA_DIR = Path(os.environ.get("PRICE_HUNTER_DATA_DIR") or (BASE_DIR / "data"))
 SETTINGS_FILE = DATA_DIR / "settings.json"
 DB_FILE = DATA_DIR / "price_hunter.db"
 

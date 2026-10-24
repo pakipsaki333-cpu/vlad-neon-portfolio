@@ -1,0 +1,63 @@
+name: Build Windows app
+
+# Builds dist/PriceHunter.exe on a real Windows runner and stores it as a
+# downloadable artifact: repo -> Actions -> this run -> Artifacts.
+on:
+  push:
+    branches: [main, "arena/**"]
+    paths:
+      - "price-hunter/**"
+      - ".github/workflows/build-windows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: price-hunter
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-desktop.txt -r requirements.txt pyinstaller
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Engine self-test (headless demo scan)
+        run: python desktop_app.py --self-test
+
+      - name: GUI import check
+        run: python -c "import desktop.gui; print('gui import ok')"
+
+      - name: GUI smoke test (open window, auto-close)
+        continue-on-error: true
+        run: python desktop_app.py --gui-smoke
+
+      - name: Build PriceHunter.exe
+        run: pyinstaller --clean --noconfirm PriceHunter.spec
+
+      - name: Verify exe
+        shell: pwsh
+        run: |
+          $exe = Get-Item dist/PriceHunter.exe
+          Write-Host ("PriceHunter.exe: {0:N1} MB" -f ($exe.Length/1MB))
+          if ($exe.Length -lt 5MB) { throw "exe suspiciously small" }
+
+      - name: Upload PriceHunter.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: PriceHunter-Windows
+          path: price-hunter/dist/PriceHunter.exe
+          if-no-files-found: error
+          retention-days: 90
