@@ -34,6 +34,7 @@ def form(**over):
         "wb_browser_path": "  C:/Program Files/Google/Chrome/Application/chrome.exe  ",
         "wb_browser_port": "9229", "wb_browser_wait_sec": "999",
         "wb_browser_headless": False,
+        "history_only": "false",
         "verify_with_price_history": True, "telegram_enabled": True,
         "close_to_tray": True, "start_minimized": False,
         "telegram_token": "", "telegram_chat_id": "42",
@@ -50,6 +51,12 @@ class ParseFormTest(unittest.TestCase):
     def test_new_token_replaces(self):
         out = parse_settings_form(form(telegram_token=" 222:new "), EXISTING)
         self.assertEqual(out["telegram_token"], "222:new")
+
+    def test_history_only_flag_parsed_and_defaults_on(self):
+        self.assertFalse(parse_settings_form(form(), EXISTING)["history_only"])
+        raw = form()
+        del raw["history_only"]
+        self.assertTrue(parse_settings_form(raw, EXISTING)["history_only"])
 
     def test_queries_and_sorts_normalized(self):
         out = parse_settings_form(form(), EXISTING)

@@ -45,14 +45,25 @@ def alert_text(a: dict) -> str:
         f"🏪 <b>{marketplace_label}</b>",
         f"<b>{title}</b>",
         "",
-        f"💰 <b>{fmt_rub(a['sale_price_rub'])}</b> вместо "
-        f"<s>{fmt_rub(a['price_rub'])}</s>  (<b>−{a['discount_pct']:.0f}%</b>)",
-        f"💸 Выгода: <b>{fmt_rub(a['saving'])}</b>",
     ]
     if a.get("drop_vs_median_pct") and a.get("hist_median"):
-        lines.append(
-            f"📉 На {a['drop_vs_median_pct']:.0f}% ниже медианы истории "
-            f"({fmt_rub(a['hist_median'])})")
+        lines += [
+            f"💰 <b>{fmt_rub(a['sale_price_rub'])}</b> — на "
+            f"<b>{a['drop_vs_median_pct']:.0f}% ниже обычной цены по истории</b>",
+            f"📉 Медиана истории: <b>{fmt_rub(a['hist_median'])}</b>",
+            f"💸 Выгода vs истории: <b>{fmt_rub(a['saving'])}</b>",
+        ]
+        if a.get("price_rub"):
+            lines.append(
+                f"Для справки, цена в карточке: {fmt_rub(a['price_rub'])} "
+                f"(скидка продавца −{a.get('discount_pct', 0):.0f}%; "
+                f"она не была основанием алерта)")
+    else:
+        lines += [
+            f"💰 <b>{fmt_rub(a['sale_price_rub'])}</b> вместо "
+            f"<s>{fmt_rub(a['price_rub'])}</s>  (<b>−{a['discount_pct']:.0f}%</b>)",
+            f"💸 Выгода: <b>{fmt_rub(a['saving'])}</b>",
+        ]
     if a.get("reasons"):
         lines.append("")
         lines += [f"• {html.escape(r)}" for r in a["reasons"]]

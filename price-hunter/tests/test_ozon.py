@@ -361,7 +361,7 @@ def _settings(**over) -> Settings:
         "wb_transport": "auto", "ozon_transport": "auto",
         "wb_request_delay_sec": 0, "ozon_request_delay_sec": 0,
         "telegram_enabled": False, "telegram_token": "",
-        "telegram_chat_id": "", "verify_with_price_history": False,
+        "telegram_chat_id": "", "verify_with_price_history": True,
     })
     settings._data.update(over)
     return settings
@@ -377,7 +377,7 @@ class _FakeWBAlert:
         }]
 
     def history_median(self, nm):
-        return None
+        return 9500.0
 
     def probe(self, q="наушники"):
         return {"ok": True, "outcome": "ok", "message": "WB доступен",
@@ -508,6 +508,49 @@ class MarketplaceScannerTest(unittest.TestCase):
                 result = scanner.scan_once()
                 self.assertEqual(result["alerts"], 1)
                 self.assertEqual(ozon.alerts_seen_on_fetch, 1)
+            finally:
+                scanner.close(close_browser=False)
+                db.close()
+
+    def test_history_only_scan_fetches_baseline_without_big_sticker(self):
+        class HistoryOnlyWB:
+            history_calls = 0
+
+            def search(self, q, page=1, sort="popular"):
+                return [{
+                    "marketplace": "wb", "nm": 999,
+                    "name": "WB товар с историей", "brand": "B",
+                    "supplier": "", "price_rub": 10000.0,
+                    "sale_price_rub": 6000.0, "rating": 5,
+                    "feedbacks": 500, "photo": "",
+                    "url": "https://www.wildberries.ru/catalog/999/detail.aspx",
+                }]
+
+            def history_median(self, nm):
+                self.history_calls += 1
+                return 10000.0
+
+            def probe(self, q="наушники"):
+                return {"ok": True, "outcome": "ok", "message": "WB доступен",
+                        "attempts": [], "products": 1}
+
+            def close(self):
+                pass
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            db = DB(Path(d) / "t.db")
+            try:
+                wb = HistoryOnlyWB()
+                scanner = Scanner(db, _settings(
+                    ozon_enabled=False, history_only=True))
+                _inject(scanner, "wb", wb)
+                scanner.last_probe_ts = 999_999_999_999
+                result = scanner.scan_once()
+                self.assertEqual(wb.history_calls, 1)
+                self.assertEqual(result["alerts"], 1)
+                alert = db.alerts(limit=1)[0]
+                self.assertEqual(alert["drop_vs_median_pct"], 40.0)
+                self.assertEqual(alert["saving"], 4000.0)
             finally:
                 scanner.close(close_browser=False)
                 db.close()

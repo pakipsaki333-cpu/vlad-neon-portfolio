@@ -53,6 +53,23 @@ def _fmt_ts(ts) -> str:
     return time.strftime("%d.%m %H:%M", time.localtime(ts)) if ts else "—"
 
 
+def _alert_reference(alert: dict) -> float:
+    """Normal-price reference for display: history median when known."""
+    return float(alert.get("hist_median") or alert.get("price")
+                 or alert.get("price_rub") or 0)
+
+
+def _alert_drop(alert: dict) -> float:
+    """History drop when known; sticker discount only for legacy alerts."""
+    drop = alert.get("drop_vs_median_pct")
+    return float(drop if drop is not None else alert.get("discount_pct") or 0)
+
+
+def _alert_reference_text(alert: dict) -> str:
+    label = "медиана истории" if alert.get("hist_median") else "цена карточки"
+    return f"{label} {fmt_rub(_alert_reference(alert))}"
+
+
 class PriceHunterApp:
     def __init__(self, root: tk.Tk, ctrl: DesktopController,
                  minimized: bool = False, icon_path: str | None = None):
@@ -148,7 +165,7 @@ class PriceHunterApp:
         kpis.pack(fill="x")
         self.kpi_vars = {}
         for key, label in [("products", "Товаров в базе"), ("alerts", "Находок за 24ч"),
-                           ("best", "Лучшая скидка 24ч"), ("saving", "Выгода за 24ч"),
+                           ("best", "Лучшее падение vs истории 24ч"), ("saving", "Выгода за 24ч"),
                            ("scans", "Сканирований"), ("snaps", "Снапшотов цен")]:
             card = tk.Frame(kpis, bg=PANEL, padx=14, pady=10,
                             highlightbackground=LINE, highlightthickness=1)
@@ -214,7 +231,8 @@ class PriceHunterApp:
         for col, title, w in [("time", "Время", 90), ("level", "Уровень", 130),
                               ("marketplace", "Площадка", 105),
                               ("name", "Товар", 330), ("sale", "Цена", 110),
-                              ("old", "Была", 110), ("disc", "Скидка", 80),
+                              ("old", "Эталон цены", 130),
+                              ("disc", "Падение", 80),
                               ("saving", "Выгода", 110), ("score", "Скор", 60)]:
             self.tree.heading(col, text=title)
             self.tree.column(col, width=w, anchor="w" if col == "name" else "center")
@@ -384,14 +402,16 @@ class PriceHunterApp:
 
         # Detector
         dt = self._section(f, "Детектор аномалий")
-        self._field(dt, 0, "Мин. скидка по карточке, %", self._svar("min_discount_pct"))
+        self._field(dt, 0, "Мин. скидка карточки (только смешанный режим), %", self._svar("min_discount_pct"))
         self._field(dt, 1, "Мин. падение vs истории, %", self._svar("min_drop_vs_history_pct"))
-        self._field(dt, 2, "Мин. исходная цена, ₽", self._svar("min_original_price_rub"))
-        self._field(dt, 3, "Мин. выгода, ₽", self._svar("min_saving_rub"))
+        self._field(dt, 2, "Мин. обычная цена по истории, ₽", self._svar("min_original_price_rub"))
+        self._field(dt, 3, "Мин. выгода vs истории, ₽", self._svar("min_saving_rub"))
         self._field(dt, 4, "Мин. скор (0–100)", self._svar("min_score"))
         self._field(dt, 5, "Кулдаун повторных алертов, ч", self._svar("alert_cooldown_hours"))
-        ttk.Checkbutton(dt, text="Проверять внешней историей WB и собственной историей базы (для WB и Ozon)",
-                        variable=self._bvar("verify_with_price_history", True)).grid(row=6, column=0, columnspan=3, sticky="w", pady=4)
+        ttk.Checkbutton(dt, text="Алерты только по падению vs истории цены (скидка по карточке сама не является основанием)",
+                        variable=self._bvar("history_only", True)).grid(row=6, column=0, columnspan=3, sticky="w", pady=4)
+        ttk.Checkbutton(dt, text="Использовать внешнюю историю WB, пока собственной истории базы мало",
+                        variable=self._bvar("verify_with_price_history", True)).grid(row=7, column=0, columnspan=3, sticky="w", pady=4)
 
         # Queries
         qs = self._section(f, "Поисковые запросы (каждый с новой строки)")
@@ -479,7 +499,8 @@ class PriceHunterApp:
         self.var_token_hint.set(
             f"сохранён: {pub['telegram_token_masked']}" if pub.get("telegram_token_masked")
             else "ещё не задан")
-        for key in ("telegram_enabled", "verify_with_price_history",
+        for key in ("telegram_enabled", "history_only",
+                    "verify_with_price_history",
                     "wb_enabled", "ozon_enabled",
                     "wb_browser_fallback", "ozon_browser_fallback",
                     "wb_browser_headless", "close_to_tray", "start_minimized"):
@@ -727,8 +748,8 @@ class PriceHunterApp:
                 _fmt_ts(a["ts"]), LEVEL_ICON.get(a["level"], a["level"]),
                 _marketplace_label(a),
                 f"{a.get('brand','')} {a.get('name','')}".strip()[:64],
-                fmt_rub(a["sale_price"]), fmt_rub(a["price"]),
-                f"−{a['discount_pct']:.0f}%", fmt_rub(a["saving"]), a["score"]))
+                fmt_rub(a["sale_price"]), fmt_rub(_alert_reference(a)),
+                f"−{_alert_drop(a):.0f}%", fmt_rub(a["saving"]), a["score"]))
         self.lb_recent.delete(0, "end")
         self._recent_urls = []
         for a in alerts[:12]:
@@ -737,7 +758,8 @@ class PriceHunterApp:
                 f"{_marketplace_label(a)} · {LEVEL_ICON.get(a['level'],'')}  "
                 f"{a.get('brand','')} {a.get('name','')[:42]} — "
                 f"{fmt_rub(a['sale_price'])} "
-                f"(было {fmt_rub(a['price'])}, −{a['discount_pct']:.0f}%)")
+                f"({_alert_reference_text(a)}, "
+                f"−{_alert_drop(a):.0f}%)")
 
     def _refresh_runs(self):
         runs = self.ctrl.runs(50)
@@ -814,7 +836,8 @@ class PriceHunterApp:
         s = st["stats"]
         self.kpi_vars["products"].set(str(s["products_seen"]))
         self.kpi_vars["alerts"].set(str(s["alerts_today"]))
-        self.kpi_vars["best"].set(f"−{s['best_discount_today']:.0f}%")
+        best = s.get("best_history_drop_today", 0) or 0
+        self.kpi_vars["best"].set(f"−{best:.0f}%")
         self.kpi_vars["saving"].set(fmt_rub(s["potential_saving_today"]))
         self.kpi_vars["scans"].set(str(s["scans_total"]))
         self.kpi_vars["snaps"].set(str(s["snapshots"]))
@@ -882,7 +905,7 @@ class PriceHunterApp:
         title = (f"Price Hunter · {_marketplace_label(a)}: "
                  f"{LEVEL_ICON.get(a['level'], a['level'])}")
         msg = (f"{a.get('brand','')} {a.get('name','')[:50]} — {fmt_rub(a['sale_price_rub'])} "
-               f"вместо {fmt_rub(a['price_rub'])} (−{a['discount_pct']:.0f}%)")
+               f"({_alert_reference_text(a)}, −{_alert_drop(a):.0f}%)")
         self.tray.notify(title, msg)
         try:
             self.root.bell()

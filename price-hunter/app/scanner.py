@@ -615,10 +615,20 @@ class Scanner:
             if product["price_rub"] > product["sale_price_rub"]:
                 discount = ((product["price_rub"] - product["sale_price_rub"])
                             / product["price_rub"] * 100)
-            likely = discount >= cfg["min_discount_pct"] or (
-                own.get("median")
-                and product["sale_price_rub"] < own["median"] * 0.7)
-            if likely and cfg.get("verify_with_price_history"):
+            own_ready = own.get("count", 0) >= 3 and bool(own.get("median"))
+            if cfg.get("history_only", True):
+                # The sticker discount must not decide whether we look for
+                # a normal-price baseline: in history-only mode, external
+                # WB/demo history is needed precisely while our own
+                # snapshot history is still too short.
+                needs_external_history = not own_ready
+            else:
+                # Legacy mixed mode keeps its cheaper pre-filter.
+                needs_external_history = (
+                    discount >= cfg["min_discount_pct"] or (
+                        own.get("median")
+                        and product["sale_price_rub"] < own["median"] * 0.7))
+            if needs_external_history and cfg.get("verify_with_price_history"):
                 if mode == "live":
                     history_fn = getattr(
                         live_clients.get(marketplace), "history_median", None)
@@ -647,6 +657,8 @@ class Scanner:
                 "own_history": own,
                 "external_hist_median": hist_median,
                 "wb_hist_median": hist_median if marketplace == "wb" else None,
+                "history_source": alert.get("history_source"),
+                "history_only": alert.get("history_only"),
             }
             alert_id = self.db.add_alert(alert)
             alert["id"] = alert_id
@@ -655,10 +667,12 @@ class Scanner:
             self._state(marketplace)["last_alerts"] += 1
             if marketplace in source_results:
                 source_results[marketplace]["alerts"] += 1
-            log.info("ALERT %s id=%s %s₽ -%.0f%% score=%s (%s)",
-                     marketplace, product["nm"],
-                     product["sale_price_rub"], alert["discount_pct"],
-                     alert["score"], mode)
+            log.info(
+                "ALERT %s id=%s %s₽ history -%.0f%% (sticker -%.0f%%) "
+                "score=%s (%s)", marketplace, product["nm"],
+                product["sale_price_rub"],
+                alert.get("drop_vs_median_pct") or 0,
+                alert["discount_pct"], alert["score"], mode)
             if cfg.get("telegram_enabled") and notifier.configured:
                 if notifier.send_alert(alert):
                     self.db.mark_telegram_sent(alert_id)

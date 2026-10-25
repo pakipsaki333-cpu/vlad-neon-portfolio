@@ -56,11 +56,42 @@ class DetectorTest(unittest.TestCase):
 
     def test_no_feedbacks_penalty_keeps_borderline_out(self):
         with_fb = detector.evaluate(prod(10_000, 3_000, feedbacks=500),
-                                    {"count": 0}, None, CFG)
+                                    {"count": 0}, 4_700, CFG)
         no_fb = detector.evaluate(prod(10_000, 3_000, feedbacks=0),
-                                  {"count": 0}, None, CFG)
+                                  {"count": 0}, 4_700, CFG)
         self.assertIsNotNone(with_fb)
         self.assertTrue(no_fb is None or no_fb["score"] < with_fb["score"])
+
+    def test_huge_sticker_without_history_is_not_an_alert(self):
+        a = detector.evaluate(prod(100_000, 1_000), {"count": 0}, None, CFG)
+        self.assertIsNone(a)
+
+    def test_own_history_can_trigger_without_sticker_discount(self):
+        # No crossed-out discount at all (price == sale), but today's
+        # price is far below our own observed normal price.
+        own = {"count": 12, "median": 10_000, "min": 9_500, "prev": 9_900}
+        a = detector.evaluate(prod(4_000, 4_000), own, None, CFG)
+        self.assertIsNotNone(a)
+        self.assertEqual(a["history_source"], "own")
+        self.assertEqual(a["saving"], 6_000)
+        self.assertFalse(any("карточке" in r for r in a["reasons"]))
+
+    def test_own_history_wins_over_inflated_external_reference(self):
+        own = {"count": 8, "median": 5_000, "min": 4_900, "prev": 5_000}
+        a = detector.evaluate(prod(20_000, 4_800), own, 20_000, CFG)
+        self.assertIsNone(a)
+
+    def test_min_price_gate_uses_history_median_not_card_price(self):
+        a = detector.evaluate(prod(1_000, 500), {"count": 0}, 5_000, CFG)
+        self.assertIsNotNone(a)
+        self.assertEqual(a["hist_median"], 5_000)
+        self.assertEqual(a["saving"], 4_500)
+
+    def test_legacy_mixed_mode_can_still_use_sticker(self):
+        cfg = dict(CFG, history_only=False)
+        a = detector.evaluate(prod(10_000, 3_000), {"count": 0}, None, cfg)
+        self.assertIsNotNone(a)
+        self.assertFalse(a["history_only"])
 
 
 class BasketTest(unittest.TestCase):
@@ -115,6 +146,9 @@ class TelegramTest(unittest.TestCase):
              "reasons": ["тест"], "source": "demo"}
         text = alert_text(a)
         self.assertIn("3 499 ₽", text)
+        self.assertIn("ниже обычной цены по истории", text)
+        self.assertIn("26 200 ₽", text)
+        self.assertIn("не была основанием алерта", text)
         self.assertIn("DEMO", text)
 
 

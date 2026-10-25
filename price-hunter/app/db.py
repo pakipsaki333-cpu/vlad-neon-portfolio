@@ -355,6 +355,9 @@ class DB:
                 "best_discount_today": one(
                     "SELECT COALESCE(MAX(discount_pct),0) FROM alerts WHERE ts>=?",
                     day_ago),
+                "best_history_drop_today": one(
+                    "SELECT COALESCE(MAX(drop_vs_median_pct),0) "
+                    "FROM alerts WHERE ts>=?", day_ago),
                 "potential_saving_today": one(
                     "SELECT COALESCE(SUM(saving),0) FROM alerts WHERE ts>=?", day_ago),
                 "scans_total": one("SELECT COUNT(*) FROM runs WHERE finished IS NOT NULL"),

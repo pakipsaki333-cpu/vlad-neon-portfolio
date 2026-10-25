@@ -33,6 +33,10 @@ DEFAULTS: dict = {
     "min_saving_rub": 1000,
     "min_score": 35,
     "alert_cooldown_hours": 6,
+    # Price-error alerts are based on a drop from the product's own
+    # observed/external price-history median.  The seller's sticker
+    # discount is evidence for display only, never a trigger by itself.
+    "history_only": True,
     "verify_with_price_history": True,
     "dest": -1257786,                  # WB geo: Moscow. Change to your region.
     "spp": 30,

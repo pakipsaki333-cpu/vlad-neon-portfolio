@@ -128,6 +128,7 @@ def parse_settings_form(raw: Mapping[str, Any], existing: dict) -> dict:
         out["wb_browser_wait_sec"] = _as_int(
             raw, "wb_browser_wait_sec", "Ожидание браузера, сек", 5, 120)
 
+    out["history_only"] = _as_bool(raw, "history_only", True)
     out["verify_with_price_history"] = bool(raw.get("verify_with_price_history", True))
     out["telegram_enabled"] = bool(raw.get("telegram_enabled", True))
     out["close_to_tray"] = bool(raw.get("close_to_tray", True))

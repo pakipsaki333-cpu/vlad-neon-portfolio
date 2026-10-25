@@ -1,15 +1,24 @@
 """Anomaly detector: is this price a real error / dump, or WB marketing?
 
-Signals, strongest first:
-  1. Drop vs product's own price history median (ours + WB price-history).
-     A self-buyout dump or a fat-finger price shows up here even when the
-     sticker discount looks normal.
-  2. Sticker discount (priceU -> salePriceU). Necessary but NOT sufficient:
-     WB sellers routinely inflate priceU to fake 80-90% discounts.
-  3. Absolute saving in roubles - a 90% drop on a 300 RUB trinket is noise.
-  4. Social proof (feedbacks/rating) - real sellable goods over junk listings.
+Default mode is history-only:
 
-Score 0..100 -> levels: FIR3 (>=70) / HOT (>=50) / WATCH (>=35).
+* an alert requires a real drop from the product's price-history median
+  (Price Hunter's own snapshots first; WB's external price-history only
+  while our own history is still too short);
+* the seller's sticker discount is kept in the alert as evidence for the
+  user, but it neither triggers an alert nor contributes to the score;
+* the minimum-price and minimum-saving gates also use the history
+  median, not the potentially inflated "before" price in the card.
+
+Setting ``history_only=False`` restores the legacy mixed detector, in
+which a very large sticker discount can alert without a history
+reference.  That mode is intentionally noisier: marketplaces routinely
+inflate the crossed-out price to fake 80-90% discounts.
+
+Other signals in both modes are the absolute saving in roubles (a huge
+percentage on a trinket is noise) and social proof (feedbacks/rating).
+
+Score 0..100 -> levels: FIRE (>=70) / HOT (>=50) / WATCH (>=35).
 """
 from __future__ import annotations
 
@@ -18,76 +27,146 @@ from typing import Any
 
 def evaluate(p: dict[str, Any], own_stats: dict, wb_hist_median: float | None,
              cfg: dict) -> dict | None:
-    price, sale = p["price_rub"], p["sale_price_rub"]
-    if sale <= 0 or price < cfg["min_original_price_rub"]:
+    price = float(p["price_rub"] or 0)
+    sale = float(p["sale_price_rub"] or 0)
+    if sale <= 0:
         return None
-    discount = (price - sale) / price * 100 if price > sale else 0.0
-    saving = price - sale
 
-    # Best available "normal price" reference.
-    ref_median = None
-    if own_stats.get("count", 0) >= 3 and own_stats.get("median"):
-        ref_median = own_stats["median"]
-    if wb_hist_median:
-        # WB price-history stores pre-SPP prices, typically >= sale price,
-        # so it is a conservative (high) reference - good for confirmation.
-        ref_median = max(ref_median or 0, wb_hist_median) or wb_hist_median
+    history_only = bool(cfg.get("history_only", True))
+    if not history_only and price < cfg["min_original_price_rub"]:
+        return None
+
+    discount = (price - sale) / price * 100 if price > sale else 0.0
+    sticker_saving = price - sale
+
+    own_count = int(own_stats.get("count", 0) or 0)
+    own_median = own_stats.get("median") \
+        if own_count >= 3 and own_stats.get("median") else None
+    external_median = float(wb_hist_median) if wb_hist_median else None
+
+    # Best available "normal price" reference.  In history-only mode our
+    # own snapshots win because they were observed in exactly the same
+    # sale-price terms as today's price.  External WB history is a useful
+    # bootstrap for newly seen WB products, but can be on a pre-SPP basis.
+    ref_median: float | None
+    history_source: str | None
+    if history_only:
+        if own_median:
+            ref_median, history_source = float(own_median), "own"
+        elif external_median:
+            ref_median, history_source = external_median, "external"
+        else:
+            ref_median, history_source = None, None
+        if ref_median is None or ref_median < cfg["min_original_price_rub"]:
+            return None
+    else:
+        ref_median = float(own_median) if own_median else None
+        history_source = "own" if own_median else None
+        if external_median:
+            ref_median = max(ref_median or 0, external_median) or external_median
+            history_source = "own+external" if own_median else "external"
 
     # Signed on purpose: <= 0 means "today's price is the everyday price",
-    # which is exactly how fake WB sticker discounts get caught below.
+    # which is exactly how fake sticker discounts are caught below.
     drop_vs_median = None
     if ref_median:
         drop_vs_median = (ref_median - sale) / ref_median * 100
 
+    saving = (ref_median - sale) if history_only and ref_median \
+        else sticker_saving
     reasons: list[str] = []
     score = 0
 
-    if discount >= 90:
-        score += 45; reasons.append(f"скидка по карточке −{discount:.0f}%")
-    elif discount >= 80:
-        score += 38; reasons.append(f"скидка по карточке −{discount:.0f}%")
-    elif discount >= 70:
-        score += 28; reasons.append(f"скидка по карточке −{discount:.0f}%")
-    elif discount >= cfg["min_discount_pct"]:
-        score += 18; reasons.append(f"скидка по карточке −{discount:.0f}%")
+    if history_only:
+        if drop_vs_median is not None and \
+                drop_vs_median >= cfg["min_drop_vs_history_pct"]:
+            # The percentage itself is the main score component (capped),
+            # instead of arbitrary points for a seller-controlled sticker.
+            score += min(70, int(round(drop_vs_median)))
+            if history_source == "own":
+                source_text = (
+                    f"медианы собственной истории ({own_count} наблюдений)")
+            else:
+                source_text = "медианы внешней истории WB"
+            reasons.append(
+                f"цена на {drop_vs_median:.0f}% ниже {source_text}: "
+                f"обычно {ref_median:,.0f} ₽")
+        if saving >= 20_000:
+            score += 15
+            reasons.append(f"выгода vs истории {saving:,.0f} ₽")
+        elif saving >= 5_000:
+            score += 10
+            reasons.append(f"выгода vs истории {saving:,.0f} ₽")
+        elif saving >= cfg["min_saving_rub"]:
+            score += 5
+    else:
+        if discount >= 90:
+            score += 45
+            reasons.append(f"скидка по карточке −{discount:.0f}%")
+        elif discount >= 80:
+            score += 38
+            reasons.append(f"скидка по карточке −{discount:.0f}%")
+        elif discount >= 70:
+            score += 28
+            reasons.append(f"скидка по карточке −{discount:.0f}%")
+        elif discount >= cfg["min_discount_pct"]:
+            score += 18
+            reasons.append(f"скидка по карточке −{discount:.0f}%")
 
-    if drop_vs_median is not None:
-        if drop_vs_median >= 60:
-            score += 40; reasons.append(
-                f"на {drop_vs_median:.0f}% ниже медианы истории ({ref_median:,.0f} ₽)")
-        elif drop_vs_median >= 40:
-            score += 30; reasons.append(
-                f"на {drop_vs_median:.0f}% ниже медианы истории ({ref_median:,.0f} ₽)")
-        elif drop_vs_median >= cfg["min_drop_vs_history_pct"]:
-            score += 18; reasons.append(
-                f"на {drop_vs_median:.0f}% ниже медианы истории ({ref_median:,.0f} ₽)")
-        elif drop_vs_median < 10 and discount >= 70:
-            # History says this 'discount' is the everyday price -> fake.
-            score -= 25; reasons.append("⚠ история: «скидка» похожа на обычную цену")
+        if drop_vs_median is not None:
+            if drop_vs_median >= 60:
+                score += 40
+                reasons.append(
+                    f"на {drop_vs_median:.0f}% ниже медианы истории "
+                    f"({ref_median:,.0f} ₽)")
+            elif drop_vs_median >= 40:
+                score += 30
+                reasons.append(
+                    f"на {drop_vs_median:.0f}% ниже медианы истории "
+                    f"({ref_median:,.0f} ₽)")
+            elif drop_vs_median >= cfg["min_drop_vs_history_pct"]:
+                score += 18
+                reasons.append(
+                    f"на {drop_vs_median:.0f}% ниже медианы истории "
+                    f"({ref_median:,.0f} ₽)")
+            elif drop_vs_median < 10 and discount >= 70:
+                # History says this 'discount' is the everyday price.
+                score -= 25
+                reasons.append("⚠ история: «скидка» похожа на обычную цену")
 
-    if saving >= 20_000:
-        score += 12; reasons.append(f"выгода {saving:,.0f} ₽")
-    elif saving >= 5_000:
-        score += 8; reasons.append(f"выгода {saving:,.0f} ₽")
-    elif saving >= cfg["min_saving_rub"]:
-        score += 4
+        if saving >= 20_000:
+            score += 12
+            reasons.append(f"выгода {saving:,.0f} ₽")
+        elif saving >= 5_000:
+            score += 8
+            reasons.append(f"выгода {saving:,.0f} ₽")
+        elif saving >= cfg["min_saving_rub"]:
+            score += 4
 
     fb = p.get("feedbacks", 0)
     if fb >= 100:
-        score += 6; reasons.append(f"живой товар: {fb} отзывов")
+        score += 6
+        reasons.append(f"живой товар: {fb} отзывов")
     elif fb >= 20:
         score += 3
     elif fb == 0:
-        score -= 8; reasons.append("нет отзывов — проверяй продавца")
+        score -= 8
+        reasons.append("нет отзывов — проверяй продавца")
 
     score = max(0, min(100, score))
 
-    is_candidate = (
-        discount >= cfg["min_discount_pct"]
-        or (drop_vs_median is not None
+    if history_only:
+        is_candidate = (
+            drop_vs_median is not None
             and drop_vs_median >= cfg["min_drop_vs_history_pct"])
-    )
-    if not is_candidate or saving < cfg["min_saving_rub"] or score < cfg["min_score"]:
+    else:
+        is_candidate = (
+            discount >= cfg["min_discount_pct"]
+            or (drop_vs_median is not None
+                and drop_vs_median >= cfg["min_drop_vs_history_pct"])
+        )
+    if not is_candidate or saving < cfg["min_saving_rub"] \
+            or score < cfg["min_score"]:
         return None
 
     level = "FIRE" if score >= 70 else "HOT" if score >= 50 else "WATCH"
@@ -97,7 +176,11 @@ def evaluate(p: dict[str, Any], own_stats: dict, wb_hist_median: float | None,
         "drop_vs_median_pct": round(drop_vs_median, 1)
         if drop_vs_median and drop_vs_median > 0 else None,
         "hist_median": round(ref_median, 2) if ref_median else None,
+        "history_source": history_source,
+        "history_points": own_count if own_median else None,
+        "history_only": history_only,
         "saving": round(saving, 2),
+        "sticker_saving": round(sticker_saving, 2),
         "score": score,
         "level": level,
         "reasons": reasons,
