@@ -67,7 +67,13 @@ def _alert_drop(alert: dict) -> float:
 
 def _alert_reference_text(alert: dict) -> str:
     label = "медиана истории" if alert.get("hist_median") else "цена карточки"
-    return f"{label} {fmt_rub(_alert_reference(alert))}"
+    text = f"{label} {fmt_rub(_alert_reference(alert))}"
+    if alert.get("hist_min"):
+        text += f" · минимум площадки {fmt_rub(float(alert['hist_min']))}"
+        vs_min = alert.get("vs_hist_min_pct")
+        if vs_min is not None and float(vs_min) > 0:
+            text += " · новый минимум"
+    return text
 
 
 class PriceHunterApp:
@@ -226,12 +232,13 @@ class PriceHunterApp:
     def _build_finds(self):
         f = self._tab("Находки")
         cols = ("time", "level", "marketplace", "name", "sale", "old",
-                "disc", "saving", "score")
+                "hist_min", "disc", "saving", "score")
         self.tree = ttk.Treeview(f, columns=cols, show="headings", height=18)
         for col, title, w in [("time", "Время", 90), ("level", "Уровень", 130),
                               ("marketplace", "Площадка", 105),
-                              ("name", "Товар", 330), ("sale", "Цена", 110),
-                              ("old", "Эталон цены", 130),
+                              ("name", "Товар", 275), ("sale", "Цена", 105),
+                              ("old", "Эталон цены", 125),
+                              ("hist_min", "Минимум площадки", 125),
                               ("disc", "Падение", 80),
                               ("saving", "Выгода", 110), ("score", "Скор", 60)]:
             self.tree.heading(col, text=title)
@@ -672,6 +679,13 @@ class PriceHunterApp:
         if a.get("drop_vs_median_pct") and a.get("hist_median"):
             extra = (f" | на {a['drop_vs_median_pct']:.0f}% ниже медианы истории "
                      f"({fmt_rub(a['hist_median'])})")
+        if a.get("hist_min"):
+            vs_min = a.get("vs_hist_min_pct")
+            if vs_min is not None and float(vs_min) > 0:
+                extra += (f" | новый минимум площадки: ниже прежнего "
+                          f"{fmt_rub(float(a['hist_min']))} на {float(vs_min):.0f}%")
+            else:
+                extra += f" | минимум площадки {fmt_rub(float(a['hist_min']))}"
         marketplace = _marketplace_of(a)
         self.var_details.set(
             f"{_marketplace_label(marketplace)} | "
@@ -749,6 +763,7 @@ class PriceHunterApp:
                 _marketplace_label(a),
                 f"{a.get('brand','')} {a.get('name','')}".strip()[:64],
                 fmt_rub(a["sale_price"]), fmt_rub(_alert_reference(a)),
+                (fmt_rub(float(a["hist_min"])) if a.get("hist_min") else "—"),
                 f"−{_alert_drop(a):.0f}%", fmt_rub(a["saving"]), a["score"]))
         self.lb_recent.delete(0, "end")
         self._recent_urls = []

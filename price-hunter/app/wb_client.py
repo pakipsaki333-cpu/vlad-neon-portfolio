@@ -679,24 +679,42 @@ class WBClient:
                 return out
         return []
 
-    def history_median(self, nm: int) -> float | None:
-        # The scanner asks this for every "likely" product on every
-        # cycle; with WB's inflated sticker discounts that is hundreds
-        # of identical basket fetches per cycle, which used to add
-        # minutes before the next marketplace even started.  External
-        # price history changes slowly — cache the median for a while.
+    def history_stats(self, nm: int) -> dict[str, Any]:
+        """External WB history summary: count/median/min/max.
+
+        The scanner may ask for this for many products on every cycle;
+        external price history changes slowly, so cache the summary.
+        At least three points are required before median/min are treated
+        as a reliable marketplace baseline.
+        """
         key = int(nm)
         now = time.time()
         cached = self._history_cache.get(key)
-        if cached is not None and now - cached[0] < 6 * 3600:
-            return cached[1]
+        if cached is not None and now - cached[0] < 6 * 3600 \
+                and isinstance(cached[1], dict):
+            return dict(cached[1])
         hist = self.price_history(nm)
-        prices = [h["price_rub"] for h in hist if h["price_rub"] > 0]
-        result = statistics.median(prices) if len(prices) >= 3 else None
+        prices = [float(h["price_rub"]) for h in hist if h["price_rub"] > 0]
+        if len(prices) >= 3:
+            stats: dict[str, Any] = {
+                "count": len(prices),
+                "median": float(statistics.median(prices)),
+                "min": min(prices),
+                "max": max(prices),
+            }
+        else:
+            stats = {"count": len(prices), "median": None,
+                     "min": None, "max": None}
         if len(self._history_cache) > 5000:
             self._history_cache.clear()
-        self._history_cache[key] = (now, result)
-        return result
+        self._history_cache[key] = (now, dict(stats))
+        return stats
+
+    def history_median(self, nm: int) -> float | None:
+        return self.history_stats(nm).get("median")
+
+    def history_min(self, nm: int) -> float | None:
+        return self.history_stats(nm).get("min")
 
     # -- diagnostics --------------------------------------------------- #
     def probe(self, query: str = "наушники") -> dict:

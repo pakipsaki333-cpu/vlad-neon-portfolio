@@ -526,9 +526,10 @@ class MarketplaceScannerTest(unittest.TestCase):
                     "url": "https://www.wildberries.ru/catalog/999/detail.aspx",
                 }]
 
-            def history_median(self, nm):
+            def history_stats(self, nm):
                 self.history_calls += 1
-                return 10000.0
+                return {"count": 30, "median": 10000.0,
+                        "min": 6500.0, "max": 11000.0}
 
             def probe(self, q="наушники"):
                 return {"ok": True, "outcome": "ok", "message": "WB доступен",
@@ -551,6 +552,8 @@ class MarketplaceScannerTest(unittest.TestCase):
                 alert = db.alerts(limit=1)[0]
                 self.assertEqual(alert["drop_vs_median_pct"], 40.0)
                 self.assertEqual(alert["saving"], 4000.0)
+                self.assertEqual(alert["hist_min"], 6500.0)
+                self.assertGreater(alert["vs_hist_min_pct"], 0)
             finally:
                 scanner.close(close_browser=False)
                 db.close()

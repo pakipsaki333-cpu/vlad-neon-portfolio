@@ -97,3 +97,12 @@ def demo_history_median(nm: int) -> float | None:
             # History proves the 'discount' is the everyday price.
             return base * (1 - disc / 100)
     return None
+
+
+def demo_history_stats(nm: int) -> dict:
+    """Simulated external history summary, including a marketplace low."""
+    median = demo_history_median(nm)
+    if median is None:
+        return {"count": 0, "median": None, "min": None, "max": None}
+    return {"count": 30, "median": float(median),
+            "min": float(median * 0.97), "max": float(median * 1.05)}

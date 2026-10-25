@@ -143,7 +143,7 @@ async function refresh(){
     <div><div class="mut">${a.level==='FIRE'?'🔥🔥 ЦЕНОВАЯ ОШИБКА':a.level==='HOT'?'🔥 Резкое падение':'👀 Подозрительно дёшево'} · ${marketLabel(a)} · ${ago(a.ts)} · ${idLabel(a)} <a href="${esc(a.url)}" target="_blank" rel="noopener">${a.nm}</a> ${a.source==='demo'?'<span class="badge demo">DEMO</span>':''} ${a.telegram_sent?'✈️ отправлено':''}</div>
     <div style="font-weight:800;margin:3px 0">${a.brand?esc(a.brand)+' — ':''}${esc(a.name||'')}</div>
     <div><span class="price">${fmt(a.sale_price)}</span><span class="old">${fmt(a.hist_median||a.price)}</span><span class="disc">−${Math.round(a.drop_vs_median_pct??a.discount_pct)}%</span></div>
-    <div class="mut">Выгода ${fmt(a.saving)}${a.drop_vs_median_pct?` · на ${Math.round(a.drop_vs_median_pct)}% ниже медианы истории (${fmt(a.hist_median)})`:''} · скор ${a.score}/100</div>
+    <div class="mut">Выгода ${fmt(a.saving)}${a.drop_vs_median_pct?` · на ${Math.round(a.drop_vs_median_pct)}% ниже медианы истории (${fmt(a.hist_median)})`:''}${a.hist_min?` · минимум площадки ${fmt(a.hist_min)}${a.vs_hist_min_pct>0?' · новый минимум':''}`:''} · скор ${a.score}/100</div>
     <div class="score"><i style="width:${a.score}%"></i></div>
     <div class="tags">${(a.reasons||[]).map(r=>`<span class="tag">${esc(r)}</span>`).join('')}</div>
     <div id="hist-${a.id}"></div></div>

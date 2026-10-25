@@ -193,6 +193,10 @@ class ShapeTest(unittest.TestCase):
         c.price_history = fake_history
         self.assertEqual(c.history_median(123), 200.0)
         self.assertEqual(c.history_median(123), 200.0)
+        self.assertEqual(c.history_stats(123),
+                         {"count": 3, "median": 200.0,
+                          "min": 100.0, "max": 300.0})
+        self.assertEqual(c.history_min(123), 100.0)
         self.assertEqual(calls, [123])
 
     def test_card_detail_v4_shape(self):

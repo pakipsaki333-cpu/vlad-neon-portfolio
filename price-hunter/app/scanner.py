@@ -611,6 +611,8 @@ class Scanner:
             own = self.db.history_stats(
                 product["nm"], marketplace=marketplace)
             hist_median = None
+            hist_min = None
+            external_hist_stats = None
             discount = 0.0
             if product["price_rub"] > product["sale_price_rub"]:
                 discount = ((product["price_rub"] - product["sale_price_rub"])
@@ -630,17 +632,26 @@ class Scanner:
                         and product["sale_price_rub"] < own["median"] * 0.7))
             if needs_external_history and cfg.get("verify_with_price_history"):
                 if mode == "live":
-                    history_fn = getattr(
-                        live_clients.get(marketplace), "history_median", None)
-                    if callable(history_fn):
-                        try:
+                    client = live_clients.get(marketplace)
+                    stats_fn = getattr(client, "history_stats", None)
+                    history_fn = getattr(client, "history_median", None)
+                    try:
+                        if callable(stats_fn):
+                            external_hist_stats = stats_fn(product["nm"]) or {}
+                            hist_median = external_hist_stats.get("median")
+                            hist_min = external_hist_stats.get("min")
+                        elif callable(history_fn):
                             hist_median = history_fn(product["nm"])
-                        except Exception:
-                            hist_median = None
+                    except Exception:
+                        hist_median = hist_min = None
+                        external_hist_stats = None
                 elif mode == "demo":
-                    hist_median = demo.demo_history_median(product["nm"])
+                    external_hist_stats = demo.demo_history_stats(product["nm"])
+                    hist_median = external_hist_stats.get("median")
+                    hist_min = external_hist_stats.get("min")
 
-            alert = detector.evaluate(product, own, hist_median, cfg)
+            alert = detector.evaluate(
+                product, own, hist_median, cfg, wb_hist_min=hist_min)
             if not alert:
                 continue
             if self.db.recent_alert(
@@ -656,7 +667,12 @@ class Scanner:
                 **product, "detected_at": int(time.time()),
                 "own_history": own,
                 "external_hist_median": hist_median,
+                "external_hist_min": hist_min,
+                "external_hist_stats": external_hist_stats,
                 "wb_hist_median": hist_median if marketplace == "wb" else None,
+                "wb_hist_min": hist_min if marketplace == "wb" else None,
+                "hist_min": alert.get("hist_min"),
+                "vs_hist_min_pct": alert.get("vs_hist_min_pct"),
                 "history_source": alert.get("history_source"),
                 "history_only": alert.get("history_only"),
             }

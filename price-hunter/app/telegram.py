@@ -53,6 +53,22 @@ def alert_text(a: dict) -> str:
             f"📉 Медиана истории: <b>{fmt_rub(a['hist_median'])}</b>",
             f"💸 Выгода vs истории: <b>{fmt_rub(a['saving'])}</b>",
         ]
+        if a.get("hist_min"):
+            vs_min = a.get("vs_hist_min_pct")
+            if vs_min is not None and vs_min > 0:
+                lines.append(
+                    f"🏆 <b>Новый минимум на площадке</b>: прежний минимум "
+                    f"{fmt_rub(a['hist_min'])}, сейчас ниже на {vs_min:.0f}%")
+            elif vs_min is not None and vs_min >= -3:
+                lines.append(
+                    f"📌 Цена у исторического минимума площадки: "
+                    f"<b>{fmt_rub(a['hist_min'])}</b>")
+            else:
+                above = abs(vs_min) if vs_min is not None else 0
+                lines.append(
+                    f"📌 Минимум на площадке по истории: "
+                    f"<b>{fmt_rub(a['hist_min'])}</b>"
+                    + (f" (текущая выше на {above:.0f}%)" if above else ""))
         if a.get("price_rub"):
             lines.append(
                 f"Для справки, цена в карточке: {fmt_rub(a['price_rub'])} "

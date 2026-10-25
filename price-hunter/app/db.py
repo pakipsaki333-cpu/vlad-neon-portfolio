@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS alerts (
     name TEXT, brand TEXT, photo TEXT, url TEXT,
     price REAL, sale_price REAL, discount_pct REAL,
     drop_vs_median_pct REAL, hist_median REAL,
+    hist_min REAL, vs_hist_min_pct REAL,
     saving REAL, score INTEGER, level TEXT,
     reasons TEXT, source TEXT,           -- 'live' | 'demo'
     telegram_sent INTEGER DEFAULT 0,
@@ -143,6 +144,11 @@ class DB:
                 self._conn.execute(
                     f"ALTER TABLE {table} ADD COLUMN marketplace "
                     "TEXT NOT NULL DEFAULT 'wb'")
+        alert_columns = {str(r["name"]) for r in self._table_info("alerts")}
+        for column in ("hist_min", "vs_hist_min_pct"):
+            if alert_columns and column not in alert_columns:
+                self._conn.execute(
+                    f"ALTER TABLE alerts ADD COLUMN {column} REAL")
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_snap_marketplace_nm_ts "
             "ON snapshots(marketplace, nm, ts)")
@@ -258,13 +264,14 @@ class DB:
             cur = self._conn.execute(
                 """INSERT INTO alerts
                        (marketplace,nm,ts,name,brand,photo,url,price,sale_price,
-                        discount_pct,drop_vs_median_pct,hist_median,saving,score,
-                        level,reasons,source,raw)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        discount_pct,drop_vs_median_pct,hist_median,hist_min,
+                        vs_hist_min_pct,saving,score,level,reasons,source,raw)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (marketplace, a["nm"], int(time.time()), a["name"], a["brand"],
                  a["photo"], a["url"], a["price_rub"], a["sale_price_rub"],
                  a["discount_pct"], a.get("drop_vs_median_pct"),
-                 a.get("hist_median"), a["saving"], a["score"], a["level"],
+                 a.get("hist_median"), a.get("hist_min"),
+                 a.get("vs_hist_min_pct"), a["saving"], a["score"], a["level"],
                  json.dumps(a["reasons"], ensure_ascii=False), a["source"],
                  json.dumps(a.get("raw", {}), ensure_ascii=False)),
             )

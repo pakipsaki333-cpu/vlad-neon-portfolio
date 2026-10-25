@@ -74,12 +74,33 @@ class DetectorTest(unittest.TestCase):
         self.assertIsNotNone(a)
         self.assertEqual(a["history_source"], "own")
         self.assertEqual(a["saving"], 6_000)
+        self.assertEqual(a["hist_min"], 9_500)
+        self.assertTrue(a["is_new_history_min"])
+        self.assertTrue(any("новый исторический минимум" in r
+                            for r in a["reasons"]))
         self.assertFalse(any("карточке" in r for r in a["reasons"]))
 
     def test_own_history_wins_over_inflated_external_reference(self):
         own = {"count": 8, "median": 5_000, "min": 4_900, "prev": 5_000}
         a = detector.evaluate(prod(20_000, 4_800), own, 20_000, CFG)
         self.assertIsNone(a)
+
+    def test_external_history_min_breakthrough_is_scored(self):
+        a = detector.evaluate(prod(10_000, 6_000), {"count": 0}, 10_000,
+                              CFG, wb_hist_min=6_500)
+        self.assertIsNotNone(a)
+        self.assertEqual(a["hist_min"], 6_500)
+        self.assertTrue(a["is_new_history_min"])
+        self.assertAlmostEqual(a["vs_hist_min_pct"], 7.7, places=1)
+
+    def test_price_above_historical_min_still_records_min(self):
+        own = {"count": 12, "median": 10_000, "min": 4_000, "prev": 9_900}
+        a = detector.evaluate(prod(10_000, 6_000), own, None, CFG)
+        self.assertIsNotNone(a)
+        self.assertEqual(a["hist_min"], 4_000)
+        self.assertFalse(a["is_new_history_min"])
+        self.assertAlmostEqual(a["vs_hist_min_pct"], -50.0, places=1)
+        self.assertFalse(any("минимума площадки" in r for r in a["reasons"]))
 
     def test_min_price_gate_uses_history_median_not_card_price(self):
         a = detector.evaluate(prod(1_000, 500), {"count": 0}, 5_000, CFG)
@@ -136,6 +157,23 @@ class DBTest(unittest.TestCase):
             finally:
                 dbt.close()  # Windows locks open SQLite files
 
+    def test_alert_persists_historical_min(self):
+        own = {"count": 12, "median": 10_000, "min": 6_500, "prev": 9_900}
+        alert = detector.evaluate(prod(10_000, 6_000, nm=778), own, None, CFG)
+        self.assertIsNotNone(alert)
+        alert["source"] = "live"
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            dbt = DB(Path(d) / "t.db")
+            try:
+                dbt.upsert_product({**prod(10_000, 6_000, nm=778),
+                                    "photo": "", "url": ""})
+                dbt.add_alert(alert)
+                loaded = dbt.alerts(limit=1)[0]
+                self.assertEqual(loaded["hist_min"], 6_500.0)
+                self.assertAlmostEqual(loaded["vs_hist_min_pct"], 7.7, places=1)
+            finally:
+                dbt.close()
+
 
 class TelegramTest(unittest.TestCase):
     def test_demo_footnote_and_prices(self):
@@ -143,10 +181,13 @@ class TelegramTest(unittest.TestCase):
              "discount_pct": 90.0, "saving": 31_491,
              "sale_price_rub": 3_499, "price_rub": 34_990,
              "drop_vs_median_pct": 87.0, "hist_median": 26_200,
+             "hist_min": 4_000, "vs_hist_min_pct": 12.5,
              "reasons": ["тест"], "source": "demo"}
         text = alert_text(a)
         self.assertIn("3 499 ₽", text)
         self.assertIn("ниже обычной цены по истории", text)
+        self.assertIn("Новый минимум на площадке", text)
+        self.assertIn("4 000 ₽", text)
         self.assertIn("26 200 ₽", text)
         self.assertIn("не была основанием алерта", text)
         self.assertIn("DEMO", text)

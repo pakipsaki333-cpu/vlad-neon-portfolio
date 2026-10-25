@@ -8,7 +8,10 @@ Default mode is history-only:
 * the seller's sticker discount is kept in the alert as evidence for the
   user, but it neither triggers an alert nor contributes to the score;
 * the minimum-price and minimum-saving gates also use the history
-  median, not the potentially inflated "before" price in the card.
+  median, not the potentially inflated "before" price in the card;
+* the lowest previously observed marketplace price is carried as
+  evidence: breaking that historical low (or sitting right on it)
+  strengthens the history-only score.
 
 Setting ``history_only=False`` restores the legacy mixed detector, in
 which a very large sticker discount can alert without a history
@@ -26,7 +29,7 @@ from typing import Any
 
 
 def evaluate(p: dict[str, Any], own_stats: dict, wb_hist_median: float | None,
-             cfg: dict) -> dict | None:
+             cfg: dict, wb_hist_min: float | None = None) -> dict | None:
     price = float(p["price_rub"] or 0)
     sale = float(p["sale_price_rub"] or 0)
     if sale <= 0:
@@ -42,7 +45,10 @@ def evaluate(p: dict[str, Any], own_stats: dict, wb_hist_median: float | None,
     own_count = int(own_stats.get("count", 0) or 0)
     own_median = own_stats.get("median") \
         if own_count >= 3 and own_stats.get("median") else None
+    own_min = own_stats.get("min") \
+        if own_count >= 3 and own_stats.get("min") else None
     external_median = float(wb_hist_median) if wb_hist_median else None
+    external_min = float(wb_hist_min) if wb_hist_min else None
 
     # Best available "normal price" reference.  In history-only mode our
     # own snapshots win because they were observed in exactly the same
@@ -72,6 +78,22 @@ def evaluate(p: dict[str, Any], own_stats: dict, wb_hist_median: float | None,
     if ref_median:
         drop_vs_median = (ref_median - sale) / ref_median * 100
 
+    # Lowest price previously known for this same product on this same
+    # marketplace.  In history-only mode follow the selected history
+    # source; in legacy mode the lowest known value from either history
+    # is the marketplace floor.  Positive vs_hist_min means today's price
+    # is below that previous low; negative means it is above it.
+    if history_only:
+        ref_min = float(own_min) if history_source == "own" and own_min \
+            else external_min if history_source == "external" else None
+    else:
+        known_mins = [float(v) for v in (own_min, external_min) if v]
+        ref_min = min(known_mins) if known_mins else None
+    vs_hist_min = None
+    if ref_min:
+        vs_hist_min = (ref_min - sale) / ref_min * 100
+    is_new_history_min = bool(vs_hist_min is not None and vs_hist_min > 0)
+
     saving = (ref_median - sale) if history_only and ref_median \
         else sticker_saving
     reasons: list[str] = []
@@ -91,6 +113,19 @@ def evaluate(p: dict[str, Any], own_stats: dict, wb_hist_median: float | None,
             reasons.append(
                 f"цена на {drop_vs_median:.0f}% ниже {source_text}: "
                 f"обычно {ref_median:,.0f} ₽")
+        if ref_min and vs_hist_min is not None:
+            if vs_hist_min > 0:
+                # Breaking the previously observed marketplace low is a
+                # strong confirmation, with a deliberately modest cap.
+                score += min(12, max(4, int(round(vs_hist_min))))
+                reasons.append(
+                    f"новый исторический минимум на площадке: ниже прежнего "
+                    f"минимума {ref_min:,.0f} ₽ на {vs_hist_min:.0f}%")
+            elif vs_hist_min >= -3:
+                score += 4
+                reasons.append(
+                    f"цена у исторического минимума площадки "
+                    f"{ref_min:,.0f} ₽")
         if saving >= 20_000:
             score += 15
             reasons.append(f"выгода vs истории {saving:,.0f} ₽")
@@ -176,6 +211,10 @@ def evaluate(p: dict[str, Any], own_stats: dict, wb_hist_median: float | None,
         "drop_vs_median_pct": round(drop_vs_median, 1)
         if drop_vs_median and drop_vs_median > 0 else None,
         "hist_median": round(ref_median, 2) if ref_median else None,
+        "hist_min": round(ref_min, 2) if ref_min else None,
+        "vs_hist_min_pct": round(vs_hist_min, 1)
+        if vs_hist_min is not None else None,
+        "is_new_history_min": is_new_history_min,
         "history_source": history_source,
         "history_points": own_count if own_median else None,
         "history_only": history_only,
