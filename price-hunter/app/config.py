@@ -36,9 +36,21 @@ DEFAULTS: dict = {
     "verify_with_price_history": True,
     "dest": -1257786,                  # WB geo: Moscow. Change to your region.
     "spp": 30,
+    # auto = httpx -> curl_cffi -> installed real Chrome/Edge (CDP/DOM)
+    "wb_transport": "auto",
+    "wb_request_delay_sec": 1.2,
+    "live_probe_interval_sec": 300,
+    "wb_browser_fallback": True,
+    "wb_browser_path": "",             # optional explicit chrome.exe/msedge.exe
+    "wb_browser_port": 9229,            # localhost CDP port for the WB window
+    "wb_browser_headless": False,       # visible is needed to pass WB checks
+    "wb_browser_wait_sec": 25,
     "telegram_enabled": True,
     "telegram_token": "",
     "telegram_chat_id": "",
+    # Desktop shell preferences (ignored by the web panel).
+    "close_to_tray": True,
+    "start_minimized": False,
 }
 
 
@@ -83,9 +95,12 @@ class Settings:
         # Clamp dangerous values (protect user's IP from WB throttling).
         self._data["interval_sec"] = max(60, int(self._data["interval_sec"]))
         self._data["pages_per_query"] = max(1, min(10, int(self._data["pages_per_query"])))
-        if str(self._data.get("wb_transport", "auto")).lower() not in (
-                "auto", "httpx", "browser", "curl_cffi"):
-            self._data["wb_transport"] = "auto"
+        transport = str(self._data.get("wb_transport", "auto")).lower()
+        transport = {"curl": "browser", "dom": "chrome", "cdp": "chrome",
+                     "edge": "chrome", "chromium": "chrome"}.get(
+                         transport, transport)
+        self._data["wb_transport"] = transport if transport in (
+            "auto", "httpx", "browser", "curl_cffi", "chrome") else "auto"
         try:
             self._data["wb_request_delay_sec"] = min(
                 10.0, max(0.5, float(self._data.get("wb_request_delay_sec", 1.2))))
@@ -96,6 +111,22 @@ class Settings:
                 3600, max(60, int(self._data.get("live_probe_interval_sec", 300))))
         except Exception:
             self._data["live_probe_interval_sec"] = 300
+        self._data["wb_browser_fallback"] = bool(
+            self._data.get("wb_browser_fallback", True))
+        self._data["wb_browser_path"] = str(
+            self._data.get("wb_browser_path") or "").strip()[:500]
+        try:
+            port = int(self._data.get("wb_browser_port", 9229))
+        except Exception:
+            port = 9229
+        self._data["wb_browser_port"] = port if 1024 <= port <= 65535 else 9229
+        self._data["wb_browser_headless"] = bool(
+            self._data.get("wb_browser_headless", False))
+        try:
+            self._data["wb_browser_wait_sec"] = min(
+                120, max(5, int(self._data.get("wb_browser_wait_sec", 25))))
+        except Exception:
+            self._data["wb_browser_wait_sec"] = 25
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         SETTINGS_FILE.write_text(
             json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")

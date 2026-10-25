@@ -5,18 +5,21 @@ Build (on Windows):  pyinstaller --clean PriceHunter.spec
 """
 block_cipher = None
 
-# curl_cffi ships a native libcurl binding the browser transport needs;
-# collect it explicitly so the packaged exe really can use it.
+# curl_cffi ships a native libcurl binding the impersonation transport
+# needs, and websocket-client drives the installed Chrome/Edge over CDP;
+# collect both explicitly so the packaged exe really can use them.
 from PyInstaller.utils.hooks import collect_all
 _curl_datas, _curl_binaries, _curl_hidden = collect_all("curl_cffi")
+_ws_datas, _ws_binaries, _ws_hidden = collect_all("websocket")
 
 a = Analysis(
     ["desktop_app.py"],
     pathex=["."],
-    binaries=_curl_binaries,
-    datas=[("assets", "assets")] + _curl_datas,
+    binaries=_curl_binaries + _ws_binaries,
+    datas=[("assets", "assets")] + _curl_datas + _ws_datas,
     hiddenimports=["pystray._win32", "PIL.Image", "PIL.ImageDraw",
-                   "curl_cffi", "curl_cffi.requests"] + _curl_hidden,
+                   "curl_cffi", "curl_cffi.requests", "websocket",
+                   "websocket._core"] + _curl_hidden + _ws_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

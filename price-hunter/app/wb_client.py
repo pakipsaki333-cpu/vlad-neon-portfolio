@@ -18,6 +18,9 @@ this client is deliberately defensive:
   Python TLS fingerprint with 403/498 while a browser from the same IP
   works; only then (transport="auto") does it retry through
   ``curl_cffi`` with Chrome impersonation, if that package is installed.
+  If *that* is still refused, it can use the installed real Chrome/Edge
+  over CDP (see :mod:`app.wb_dom`): first ``fetch()`` from inside a live
+  WB tab, then the already rendered search DOM as a last resort.
 
 No account, token or payment data is involved. The client only READS
 public storefront prices and stays polite (see request delay in the
@@ -37,6 +40,8 @@ from urllib.parse import urlparse
 import httpx
 
 from .basket import photo_url, price_history_urls, product_url
+from .wb_dom import (BrowserSessionError, ChromeBrowserSession, browser_info,
+                     chrome_available, parse_dom_search_items)
 
 log = logging.getLogger("wb")
 
@@ -51,6 +56,7 @@ SEARCH_ENDPOINTS = [
 ]
 CARD_ENDPOINTS = [
     "https://card.wb.ru/cards/v4/detail",
+    "https://www.wildberries.ru/__internal/u-card/cards/v4/detail",
 ]
 
 _USER_AGENT = (
@@ -276,9 +282,19 @@ class WBClient:
     dest: int = -1257786
     spp: int = 30
     timeout: float = 15.0
-    transport: str = "auto"      # auto | httpx | browser (curl_cffi)
+    # auto | httpx | browser (curl_cffi impersonation) |
+    # chrome (installed real Chrome/Edge via CDP, incl. rendered-DOM reads)
+    transport: str = "auto"
+    browser_fallback: bool = True        # auto may escalate to real Chrome
+    browser_executable: str = ""         # optional explicit Chrome/Edge path
+    browser_profile_dir: str = ""        # dedicated local browser profile
+    browser_port: int = 9229
+    browser_headless: bool = False
+    browser_wait_sec: float = 25
     _httpx_client: Any = field(default=None, repr=False)
     _curl_session: Any = field(default=None, repr=False)
+    _browser_session: Any = field(default=None, repr=False)
+    _prefer_dom_search: bool = field(default=False, repr=False)
     _search_idx: int = field(default=0, repr=False)
     _card_idx: int = field(default=0, repr=False)
     last_attempts: list[dict] = field(default_factory=list, repr=False)
@@ -287,8 +303,38 @@ class WBClient:
 
     def __post_init__(self):
         t = str(self.transport or "auto").lower()
-        self.transport = "browser" if t == "curl_cffi" else (
-            t if t in ("auto", "httpx", "browser") else "auto")
+        aliases = {"curl_cffi": "browser", "curl": "browser",
+                   "dom": "chrome", "cdp": "chrome", "edge": "chrome",
+                   "real_browser": "chrome", "chromium": "chrome"}
+        t = aliases.get(t, t)
+        self.transport = t if t in ("auto", "httpx", "browser", "chrome") else "auto"
+
+    # -- real browser session ------------------------------------------ #
+    def _real_browser_session(self) -> ChromeBrowserSession:
+        if self._browser_session is None:
+            self._browser_session = ChromeBrowserSession(
+                executable=self.browser_executable,
+                profile_dir=self.browser_profile_dir,
+                port=self.browser_port,
+                headless=self.browser_headless,
+                wait_sec=self.browser_wait_sec,
+                timeout=max(20.0, self.timeout),
+            )
+        return self._browser_session
+
+    def _chrome_allowed(self) -> bool:
+        return self.transport == "chrome" or (
+            self.transport == "auto" and self.browser_fallback)
+
+    def open_browser_session(self) -> dict:
+        """Open/warm the visible dedicated Chrome/Edge window for WB."""
+        return self._real_browser_session().ensure_ready()
+
+    def close_browser(self) -> None:
+        """Terminate the dedicated browser if this app launched it."""
+        if self._browser_session is not None:
+            self._browser_session.terminate()
+            self._browser_session = None
 
     # -- low level ----------------------------------------------------- #
     def _headers(self, browser: bool = False) -> dict[str, str]:
@@ -309,6 +355,18 @@ class WBClient:
     def _raw_get(self, transport: str, url: str,
                  params: dict | None) -> _Response:
         started = time.monotonic()
+        if transport == "chrome":
+            # The request is made by the real browser itself, from inside a
+            # wildberries.ru tab, so WB sees that browser's actual session;
+            # nothing is copied out of it.
+            payload = self._real_browser_session().fetch(url, params)
+            headers = {str(k).lower(): str(v)
+                       for k, v in dict(payload.get("headers") or {}).items()}
+            return _Response(
+                status_code=int(payload.get("status") or 0),
+                text=str(payload.get("text") or ""), headers=headers,
+                url=str(payload.get("url") or url), transport=transport,
+                elapsed_ms=int((time.monotonic() - started) * 1000))
         if transport == "browser":
             from curl_cffi import requests as curl_requests
             if self._curl_session is None:
@@ -337,11 +395,19 @@ class WBClient:
             return ["httpx"]
         if self.transport == "browser":
             return ["browser", "httpx"]
-        # auto: plain first; browser impersonation only for gated hosts
-        # and only if available (a 403 there is deterministic, not luck).
+        if self.transport == "chrome":
+            # Basket price-history is not behind the same gate and should
+            # not force a browser launch; gated WB APIs go through the tab.
+            return ["chrome", "httpx"] if gated else ["httpx"]
+        # auto: plain first; impersonation next; the installed real browser
+        # is the last resort for networks where both app transports get 403.
+        transports = ["httpx"]
         if gated and curl_cffi_available():
-            return ["httpx", "browser"]
-        return ["httpx"]
+            transports.append("browser")
+        if gated and self.browser_fallback and chrome_available(
+                self.browser_executable):
+            transports.append("chrome")
+        return transports
 
     def _request_json(self, url: str, params: dict | None,
                       attempts: list[dict]):
@@ -356,16 +422,18 @@ class WBClient:
             try:
                 resp = self._raw_get(transport, url, params)
             except Exception as e:
+                outcome = getattr(e, "outcome", "network_error") \
+                    if isinstance(e, BrowserSessionError) else "network_error"
                 attempts.append({
                     "endpoint": url, "transport": transport, "status": None,
-                    "outcome": "network_error", "error": str(e)[:250],
+                    "outcome": outcome, "error": str(e)[:350],
                     "elapsed_ms": int((time.monotonic() - started) * 1000),
                 })
                 # A connection-level failure will not heal by switching
                 # httpx -> browser on the same host (the TLS gate answers
-                # with HTTP 403, handled below). Only an explicitly chosen
-                # browser transport falls back to httpx here.
-                if transport == "browser" and idx < len(transports) - 1:
+                # with HTTP 403, handled below). Browser-first settings may
+                # still fall back to httpx if the browser itself is absent.
+                if transport in ("browser", "chrome") and idx < len(transports) - 1:
                     continue
                 return None, None, None
             payload, parse_failed = None, False
@@ -388,6 +456,59 @@ class WBClient:
             return resp, payload, attempt
         return None, None, None
 
+    def _dom_allowed(self) -> bool:
+        return self.transport == "chrome" or (
+            self.transport == "auto" and self.browser_fallback
+            and chrome_available(self.browser_executable))
+
+    def _search_dom(self, query: str, page: int, sort: str,
+                    attempts: list[dict]) -> tuple[list[dict], bool]:
+        """Last resort: read the search page WB rendered for the browser.
+
+        Returns ``(products, recognized_empty)``.  This matters because on
+        some networks WB refuses even API ``fetch()`` calls made from a tab,
+        while still rendering the normal search grid for that same browser.
+        """
+        started = time.monotonic()
+        endpoint = "https://www.wildberries.ru/catalog/0/search.aspx"
+        try:
+            payload = self._real_browser_session().search_dom_payload(
+                query, page=page, sort=sort)
+        except BrowserSessionError as e:
+            attempts.append({
+                "endpoint": endpoint, "transport": "chrome-dom",
+                "status": None, "outcome": e.outcome,
+                "error": str(e)[:350],
+                "elapsed_ms": int((time.monotonic() - started) * 1000),
+            })
+            return [], False
+        except Exception as e:  # browser vanished mid-read etc.
+            attempts.append({
+                "endpoint": endpoint, "transport": "chrome-dom",
+                "status": None, "outcome": "network_error",
+                "error": str(e)[:350],
+                "elapsed_ms": int((time.monotonic() - started) * 1000),
+            })
+            return [], False
+
+        items = payload.get("items") or []
+        products = parse_dom_search_items(items)
+        body = str(payload.get("bodyText") or "").lower()
+        recognized_empty = not products and any(
+            phrase in body for phrase in (
+                "ничего не нашлось", "ничего не найдено",
+                "по вашему запросу ничего", "товары не найдены"))
+        attempts.append({
+            "endpoint": str(payload.get("url") or endpoint),
+            "transport": "chrome-dom", "status": 200,
+            "outcome": "ok" if products else (
+                "empty" if recognized_empty else "bad_shape"),
+            "shape": "rendered-dom", "raw_products": len(items),
+            "products": len(products),
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+        })
+        return products, recognized_empty
+
     # -- search -------------------------------------------------------- #
     def search(self, query: str, page: int = 1,
                sort: str = "popular") -> list[dict]:
@@ -398,9 +519,25 @@ class WBClient:
             "spp": self.spp, "suppressSpellcheck": "false",
         }
         attempts: list[dict] = []
+        valid_empty = False
+        if self._prefer_dom_search and self._dom_allowed():
+            # A previous request on this client proved the API path is
+            # refused while rendered pages work.  Do not pay the full
+            # endpoint/transport matrix again for every query in a scan;
+            # if DOM has stopped working, fall through and retest APIs.
+            dom_products, dom_empty = self._search_dom(
+                query, page, sort, attempts)
+            if dom_products:
+                self.last_attempts = attempts
+                self.last_endpoint = attempts[-1].get("endpoint")
+                self.last_transport = "chrome-dom"
+                return dom_products
+            if dom_empty:
+                self.last_attempts = attempts
+                return []
+            self._prefer_dom_search = False
         order = (SEARCH_ENDPOINTS[self._search_idx:]
                  + SEARCH_ENDPOINTS[: self._search_idx])
-        valid_empty = False
         dead_hosts: set[str] = set()
 
         def mark_dead(endpoint_url: str) -> None:
@@ -443,6 +580,16 @@ class WBClient:
             mark_dead(url)
             if attempt["outcome"] == "rate_limited":
                 time.sleep(2)
+        if not valid_empty and self._dom_allowed():
+            dom_products, dom_empty = self._search_dom(
+                query, page, sort, attempts)
+            if dom_products:
+                self._prefer_dom_search = True
+                self.last_attempts = attempts
+                self.last_endpoint = attempts[-1].get("endpoint")
+                self.last_transport = "chrome-dom"
+                return dom_products
+            valid_empty = valid_empty or dom_empty
         self.last_attempts = attempts
         if valid_empty:
             return []  # WB answered properly; this query has no results.
@@ -520,10 +667,17 @@ class WBClient:
         """One search (+ card check on the first hit) with a verdict the
         UI can show verbatim. Never raises."""
         started = time.monotonic()
+        real_browser = browser_info(self.browser_executable)
         base: dict[str, Any] = {
             "ok": False, "outcome": "unknown", "query": query,
             "transport_setting": self.transport,
             "browser_transport_available": curl_cffi_available(),
+            "chrome_transport_available": real_browser["available"],
+            "chrome_executable_found": real_browser["executable_found"],
+            "chrome_executable": real_browser["executable"],
+            "chrome_websocket_available": real_browser["websocket_available"],
+            "chrome_fallback_enabled": self.browser_fallback,
+            "chrome_port": self.browser_port,
             "dest": self.dest, "spp": self.spp, "products": 0,
             "sample": None, "card_ok": None, "attempts": [],
             "message": "", "hint": "",
@@ -574,19 +728,43 @@ class WBClient:
                 except Exception:
                     pass
         self._httpx_client = self._curl_session = None
+        if self._browser_session is not None:
+            # Closing a temporary diagnostic client must not kill the
+            # visible browser the user may still need for WB's check.
+            self._browser_session.close()
+            self._browser_session = None
 
 
 def _hint_for(outcome: str, probe: dict) -> str:
     if outcome == "blocked":
-        if not probe.get("browser_transport_available"):
-            return ("WB режет обычный HTTP-клиент по TLS-отпечатку, а "
-                    "браузерный транспорт (curl_cffi) в этой сборке недоступен. "
-                    "Обнови приложение/сборку с curl_cffi или запускай из "
-                    "исходников после pip install curl_cffi.")
-        return ("WB показывает антибот даже браузерному транспорту. Отключи "
-                "VPN/прокси, попробуй другую сеть (домашний интернет/мобильная "
-                "раздача), открой wildberries.ru в обычном браузере и пройди "
-                "проверку, если WB её покажет, затем повтори диагностику.")
+        if not probe.get("chrome_transport_available"):
+            if not probe.get("chrome_executable_found"):
+                return ("WB режет оба транспортных клиента приложения, а Chrome/Edge "
+                        "на этом ПК не найден. Установи Chrome или Edge либо укажи "
+                        "полный путь к браузеру в настройках, затем выбери транспорт "
+                        "WB «chrome» и повтори проверку.")
+            if not probe.get("browser_transport_available"):
+                return ("WB режет обычный HTTP-клиент по TLS-отпечатку, а "
+                        "браузерный транспорт (curl_cffi) в этой сборке недоступен. "
+                        "Обнови приложение/сборку или запускай из исходников после "
+                        "pip install curl_cffi websocket-client.")
+            return ("Настоящий браузер найден, но CDP-транспорт недоступен в сборке. "
+                    "Обнови приложение; из исходников нужен websocket-client.")
+        tried_dom = any(a.get("transport") == "chrome-dom"
+                        for a in probe.get("attempts") or [])
+        tried_chrome = any(str(a.get("transport", "")).startswith("chrome")
+                           for a in probe.get("attempts") or [])
+        if tried_chrome or tried_dom:
+            return ("WB не пропустил даже настоящий браузер на этом проходе. "
+                    "Оставь ОТКРЫТЫМ отдельное окно Chrome/Edge, которое открыл "
+                    "Price Hunter, дождись/пройди проверку WB в нём, затем нажми "
+                    "диагностику ещё раз. Это отдельный профиль Price Hunter: "
+                    "проверка в твоём обычном окне Chrome его не прогревает. "
+                    "Окно нельзя закрывать во время охоты; куки никуда не отправляются.")
+        return ("WB режет httpx и curl_cffi, но на ПК найден настоящий Chrome/Edge. "
+                "В Настройках выбери «Транспорт WB → chrome», сохрани и снова нажми "
+                "«Проверить WB»: приложение откроет отдельный браузерный профиль. "
+                "Если WB покажет проверку — пройди её в этом окне и повтори.")
     if outcome == "rate_limited":
         return ("Слишком частые запросы. Увеличь интервал сканирования и "
                 "паузу между запросами, уменьши число запросов/страниц.")

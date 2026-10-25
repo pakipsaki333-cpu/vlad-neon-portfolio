@@ -27,7 +27,10 @@ def form(**over):
         "min_score": "35", "alert_cooldown_hours": "6",
         "dest": "-1257786", "spp": "30",
         "wb_transport": "curl_cffi", "wb_request_delay_sec": "1.5",
-        "live_probe_interval_sec": "300",
+        "live_probe_interval_sec": "300", "wb_browser_fallback": True,
+        "wb_browser_path": "  C:/Program Files/Google/Chrome/Application/chrome.exe  ",
+        "wb_browser_port": "9229", "wb_browser_wait_sec": "999",
+        "wb_browser_headless": False,
         "verify_with_price_history": True, "telegram_enabled": True,
         "close_to_tray": True, "start_minimized": False,
         "telegram_token": "", "telegram_chat_id": "42",
@@ -58,6 +61,12 @@ class ParseFormTest(unittest.TestCase):
         out = parse_settings_form(form(), EXISTING)
         self.assertEqual(out["wb_transport"], "browser")  # curl_cffi alias
         self.assertEqual(out["wb_request_delay_sec"], 1.5)
+        chrome = parse_settings_form(form(wb_transport="dom"), EXISTING)
+        self.assertEqual(chrome["wb_transport"], "chrome")
+        self.assertTrue(chrome["wb_browser_fallback"])
+        self.assertTrue(chrome["wb_browser_path"].endswith("chrome.exe"))
+        self.assertEqual(chrome["wb_browser_port"], 9229)
+        self.assertEqual(chrome["wb_browser_wait_sec"], 120)
         with self.assertRaises(ValueError):
             parse_settings_form(form(wb_transport="telepathy"), EXISTING)
 

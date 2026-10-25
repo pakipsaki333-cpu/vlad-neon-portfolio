@@ -34,6 +34,11 @@ jobs:
       - name: Unit tests
         run: python -m unittest discover -s tests -v
 
+      - name: Real browser CDP smoke (local test page, no WB call)
+        env:
+          PRICE_HUNTER_BROWSER_SMOKE: "1"
+        run: python -m unittest tests.test_wb_dom_live -v
+
       - name: Engine self-test (headless demo scan)
         run: python desktop_app.py --self-test
 

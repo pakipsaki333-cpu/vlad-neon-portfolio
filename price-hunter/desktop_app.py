@@ -5,6 +5,7 @@ Usage:
   python desktop_app.py --minimized  # start in the tray (used by autostart)
   python desktop_app.py --self-test  # headless: one demo scan, prints JSON
   python desktop_app.py --diagnose-wb  # WB connectivity verdict (JSON + file)
+  python desktop_app.py --open-wb-browser  # open the dedicated WB Chrome/Edge
   python desktop_app.py --gui-smoke  # CI: build the window, close after 1s
   PriceHunter.exe                    # packaged build, same flags work
 
@@ -92,7 +93,9 @@ def diagnose_wb(query: str | None = None) -> int:
     try:
         result = ctrl.diagnose_wb(query)
     finally:
-        ctrl.shutdown()
+        # Keep a browser window opened by diagnostics alive so the user
+        # can finish WB's browser check there and rerun this command.
+        ctrl.shutdown(close_browser=False)
     text = json.dumps(result, ensure_ascii=False, indent=2)
     try:
         (DATA_DIR / "wb-diagnostics.json").write_text(text, encoding="utf-8")
@@ -102,6 +105,26 @@ def diagnose_wb(query: str | None = None) -> int:
         _configure_stdout()
         print(text)
     return 0 if result.get("ok") else 2
+
+
+def open_wb_browser() -> int:
+    """Open the dedicated Chrome/Edge WB window and leave it open."""
+    _setup_logging()
+    from desktop.controller import DesktopController
+    ctrl = DesktopController()
+    exit_code = 0
+    try:
+        try:
+            result = ctrl.open_wb_browser()
+        except Exception as e:
+            result = {"ok": False, "error": str(e)}
+            exit_code = 2
+    finally:
+        ctrl.shutdown(close_browser=False)
+    if sys.stdout:
+        _configure_stdout()
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    return exit_code
 
 
 def main() -> int:
@@ -115,6 +138,8 @@ def main() -> int:
     ap.add_argument("--diagnose-wb", nargs="?", const="__default__",
                     default=None, metavar="QUERY",
                     help="check WB connectivity, print JSON verdict and exit")
+    ap.add_argument("--open-wb-browser", action="store_true",
+                    help="open the dedicated Chrome/Edge window for WB")
     args = ap.parse_args()
 
     if args.self_test:
@@ -122,6 +147,8 @@ def main() -> int:
     if args.diagnose_wb is not None:
         return diagnose_wb(None if args.diagnose_wb == "__default__"
                            else args.diagnose_wb)
+    if args.open_wb_browser:
+        return open_wb_browser()
 
     _setup_logging()
     from desktop.controller import DesktopController

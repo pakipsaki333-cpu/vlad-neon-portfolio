@@ -81,7 +81,7 @@ canvas.hist{width:100%;height:120px;background:#0b0b1c;border-radius:10px;margin
   <div><label>Мин. падение vs истории, %</label><input id="sMinDrop" type="number"></div>
   <div><label>Мин. исходная цена, ₽</label><input id="sMinPrice" type="number"></div>
   <div><label>Мин. выгода, ₽</label><input id="sMinSaving" type="number"></div>
-  <div><label>Транспорт WB (auto — при 403 браузерный)</label><select id="sTransport"><option value="auto">auto</option><option value="browser">browser (curl_cffi Chrome)</option><option value="httpx">httpx (обычный)</option></select></div>
+  <div><label>Транспорт WB (auto — httpx → curl_cffi → настоящий Chrome/Edge)</label><select id="sTransport"><option value="auto">auto</option><option value="chrome">chrome (настоящий браузер/CDP)</option><option value="browser">browser (curl_cffi Chrome)</option><option value="httpx">httpx (обычный)</option></select></div>
   <div><label>Пауза между запросами WB, сек</label><input id="sDelay" type="number" step="0.1"></div>
  </div>
  <h3>✈️ Telegram</h3>

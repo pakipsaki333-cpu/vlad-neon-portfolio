@@ -23,6 +23,8 @@ from app.db import DB  # noqa: E402
 from app.scanner import Scanner  # noqa: E402
 from app.wb_client import (WBClient, WBUnavailable, _Response,  # noqa: E402
                            extract_products, normalize_product)
+from app.wb_dom import (find_browser_executable,  # noqa: E402
+                        parse_dom_search_items)
 
 RAW = {"id": 1097975275, "name": "Наушники X", "brand": "Brand",
        "supplier": "Seller", "reviewRating": 4.9, "feedbacks": 123,
@@ -42,6 +44,18 @@ class FakeClient(WBClient):
         text = body if isinstance(body, str) else json.dumps(body)
         return _Response(status, text, {"content-type": "application/json"},
                          url, transport, 1)
+
+
+class DOMFallbackClient(FakeClient):
+    def _search_dom(self, query, page, sort, attempts):
+        attempts.append({
+            "endpoint": "https://www.wildberries.ru/catalog/0/search.aspx",
+            "transport": "chrome-dom", "status": 200, "outcome": "ok",
+            "shape": "rendered-dom", "raw_products": 1, "products": 1,
+        })
+        product = normalize_product(RAW)
+        product["source_transport"] = "chrome-dom"
+        return [product], False
 
 
 class ShapeTest(unittest.TestCase):
@@ -89,6 +103,35 @@ class ShapeTest(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertEqual(c.last_transport, "browser")
 
+    def test_rendered_dom_fallback_after_all_403(self):
+        # This is the user's confirmed 2026-10-25 case: LIVE is selected,
+        # but httpx and curl_cffi both receive 403 while a real browser
+        # can render WB.  Rendered tiles are the final fallback.
+        c = DOMFallbackClient(
+            lambda t, u, p, n: (403, "<html>wbaas antibot</html>"),
+            transport="auto")
+        with mock.patch.object(wbc, "curl_cffi_available", return_value=True), \
+                mock.patch.object(wbc, "chrome_available", return_value=True):
+            out = c.search("смартфон iphone")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(c.last_transport, "chrome-dom")
+        self.assertEqual(out[0]["source_transport"], "chrome-dom")
+        # The next query goes straight to DOM instead of replaying the
+        # already-refused API endpoint/transport matrix.
+        c.calls.clear()
+        with mock.patch.object(wbc, "chrome_available", return_value=True):
+            self.assertEqual(len(c.search("наушники sony")), 1)
+        self.assertEqual(c.calls, [])
+
+    def test_auto_transport_chain_includes_real_chrome_last(self):
+        c = FakeClient(lambda t, u, p, n: (200, {"products": [RAW]}),
+                       transport="auto")
+        with mock.patch.object(wbc, "curl_cffi_available", return_value=True), \
+                mock.patch.object(wbc, "chrome_available", return_value=True):
+            self.assertEqual(
+                c._transports_for("https://search.wb.ru/search"),
+                ["httpx", "browser", "chrome"])
+
     def test_card_detail_v4_shape(self):
         seen_urls = {}
 
@@ -99,6 +142,35 @@ class ShapeTest(unittest.TestCase):
         out = c.card_detail([RAW["id"]])
         self.assertEqual(len(out), 1)
         self.assertIn("/cards/v4/detail", seen_urls["url"])
+
+
+class BrowserDOMTest(unittest.TestCase):
+    def test_parse_rendered_tile_text(self):
+        items = [{
+            "id": 123456,
+            "title": "Apple / iPhone 16 128 ГБ",
+            "text": ("-71%\n9 990 ₽\n33 990 ₽\nс WB Кошельком\n"
+                     "Apple / iPhone 16 128 ГБ\n4,9 • 1 234 оценки\n"
+                     "от 499 ₽/мес"),
+            "delText": "33 990 ₽",
+            "href": "https://www.wildberries.ru/catalog/123456/detail.aspx",
+            "photo": "https://example.invalid/photo.webp",
+        }]
+        out = parse_dom_search_items(items)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["brand"], "Apple")
+        self.assertEqual(out[0]["name"], "iPhone 16 128 ГБ")
+        self.assertEqual(out[0]["sale_price_rub"], 9990.0)
+        self.assertEqual(out[0]["price_rub"], 33990.0)
+        self.assertEqual(out[0]["rating"], 4.9)
+        self.assertEqual(out[0]["feedbacks"], 1234)
+
+    def test_custom_browser_path_must_exist(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            fake = Path(d) / "chrome.exe"
+            fake.write_bytes(b"stub")
+            self.assertEqual(find_browser_executable(str(fake)), str(fake))
+            self.assertIsNone(find_browser_executable(str(Path(d) / "no.exe")))
 
 
 class NormalizePriceTest(unittest.TestCase):
@@ -146,8 +218,7 @@ class ScannerResilienceTest(unittest.TestCase):
         sc = Scanner(db, settings)
         cfg = settings.get()
         sc._client_cache = _DummyWB()  # type: ignore[assignment]
-        sc._client_sig = (cfg.get("dest"), cfg.get("spp"),
-                          cfg.get("wb_transport", "auto"))
+        sc._client_sig = sc._client_signature(cfg)
         sc.last_probe_ts = 999_999_999_999  # live mode: skip probe
         return sc
 

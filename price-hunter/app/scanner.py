@@ -9,10 +9,11 @@ import time
 from typing import Any, Callable
 
 from . import demo, detector
-from .config import Settings
+from .config import DATA_DIR, Settings
 from .db import DB
 from .telegram import TelegramNotifier
 from .wb_client import WBClient, WBUnavailable, curl_cffi_available
+from .wb_dom import browser_info
 
 log = logging.getLogger("scanner")
 
@@ -53,20 +54,58 @@ class Scanner:
 
     def _new_client(self) -> WBClient:
         cfg = self.settings.get()
-        return WBClient(dest=cfg["dest"], spp=cfg["spp"],
-                        transport=cfg.get("wb_transport", "auto"))
+        return WBClient(
+            dest=cfg["dest"], spp=cfg["spp"],
+            transport=cfg.get("wb_transport", "auto"),
+            browser_fallback=bool(cfg.get("wb_browser_fallback", True)),
+            browser_executable=str(cfg.get("wb_browser_path") or ""),
+            browser_profile_dir=str(DATA_DIR / "browser-profile"),
+            browser_port=int(cfg.get("wb_browser_port", 9229) or 9229),
+            browser_headless=bool(cfg.get("wb_browser_headless", False)),
+            browser_wait_sec=float(cfg.get("wb_browser_wait_sec", 25) or 25),
+        )
+
+    @staticmethod
+    def _client_signature(cfg: dict) -> tuple:
+        return (cfg.get("dest"), cfg.get("spp"),
+                cfg.get("wb_transport", "auto"),
+                bool(cfg.get("wb_browser_fallback", True)),
+                str(cfg.get("wb_browser_path") or ""),
+                int(cfg.get("wb_browser_port", 9229) or 9229),
+                bool(cfg.get("wb_browser_headless", False)),
+                float(cfg.get("wb_browser_wait_sec", 25) or 25))
 
     def _client(self) -> WBClient:
         """Cached scan-thread client (keeps session cookies and the
         endpoint that last worked between scans)."""
         cfg = self.settings.get()
-        sig = (cfg.get("dest"), cfg.get("spp"), cfg.get("wb_transport", "auto"))
+        sig = self._client_signature(cfg)
         if self._client_cache is None or sig != self._client_sig:
             if self._client_cache is not None:
                 self._client_cache.close()
             self._client_cache = self._new_client()
             self._client_sig = sig
         return self._client_cache
+
+    def open_browser(self) -> dict:
+        """Open the dedicated visible Chrome/Edge window used for WB."""
+        return self._client().open_browser_session()
+
+    def close(self, close_browser: bool = True) -> None:
+        """Release the cached WB client; optionally terminate its browser.
+
+        CLI diagnostics pass ``close_browser=False`` so the user can keep
+        the opened WB window, finish its check there, and rerun the check.
+        """
+        if self._client_cache is not None:
+            if close_browser:
+                try:
+                    self._client_cache.close_browser()
+                except Exception:
+                    pass
+            self._client_cache.close()
+            self._client_cache = None
+            self._client_sig = None
 
     def reset_mode(self) -> None:
         """Forget the live/demo verdict so the next scan re-probes WB."""
@@ -113,15 +152,24 @@ class Scanner:
         return self.effective_mode
 
     def diagnose(self, query: str | None = None) -> dict:
-        """User-triggered WB check (own client; safe next to a running
-        scan). Updates the mode verdict and wakes the scan loop when
-        LIVE just became available."""
+        """User-triggered WB check. Updates the mode verdict and wakes
+        the scan loop when LIVE just became available.
+
+        For transports that may use the dedicated browser profile, the
+        cached client is reused: two clients must not launch competing
+        Chrome processes against one profile/port.  The browser session
+        itself serializes tab operations between scan and diagnostics.
+        """
+        transport = str(self.settings.get().get(
+            "wb_transport", "auto") or "auto").lower()
+        use_cached = transport in ("auto", "chrome", "dom", "cdp", "edge")
         with self._probe_lock:
-            client = self._new_client()
+            client = self._client() if use_cached else self._new_client()
             try:
                 probe = client.probe(query or self._probe_query())
             finally:
-                client.close()
+                if not use_cached:
+                    client.close()
             before = self.effective_mode
             effective = self._apply_probe(probe)
         if probe.get("ok") and before != "live" and effective == "live" \
@@ -361,6 +409,7 @@ class Scanner:
             "live_failures": self.live_failures,
             "wb_transport": cfg.get("wb_transport", "auto"),
             "browser_transport_available": curl_cffi_available(),
+            "chrome_transport": browser_info(str(cfg.get("wb_browser_path") or "")),
             "last_scan_ts": self.last_scan_ts,
             "next_scan_ts": self.next_scan_ts if self.running else None,
             "last_error": self.last_error,

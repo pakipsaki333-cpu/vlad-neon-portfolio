@@ -159,6 +159,8 @@ class PriceHunterApp:
         ttk.Button(actions, text="Проверить соединение WB",
                    style="Accent.TButton",
                    command=lambda: self._diagnose_wb()).pack(side="left", padx=4)
+        ttk.Button(actions, text="Открыть браузер WB",
+                   command=lambda: self._open_wb_browser()).pack(side="left", padx=4)
 
         tk.Label(f, text="Последние находки (двойной клик — открыть товар):",
                  bg=BG, fg=MUT, font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(10, 4))
@@ -283,17 +285,33 @@ class PriceHunterApp:
         tk.Label(sc, text="Транспорт WB", bg=PANEL, fg=MUT,
                  font=("Segoe UI", 9, "bold")).grid(row=6, column=0, sticky="w", pady=3, padx=(0, 8))
         ttk.Combobox(sc, textvariable=self._svar("wb_transport", "auto"),
-                     state="readonly", values=["auto", "browser", "httpx"],
+                     state="readonly", values=["auto", "chrome", "browser", "httpx"],
                      width=16).grid(row=6, column=1, sticky="w", pady=3)
-        tk.Label(sc, text="auto: обычный HTTP, при 403/498 — браузерный (curl_cffi Chrome). Если WB «не ищет», оставь auto",
+        tk.Label(sc, text="auto: httpx → curl_cffi → настоящий Chrome/Edge. chrome: сразу настоящий браузер (нужен, если диагностика показывает 403 и у httpx, и у browser); browser = только имитация curl_cffi",
                  bg=PANEL, fg=MUT, wraplength=620, justify="left").grid(row=6, column=2, sticky="w", padx=8)
-        self._field(sc, 7, "Пауза между запросами WB, сек", self._svar("wb_request_delay_sec"))
-        self._field(sc, 8, "Повторная проверка LIVE, сек", self._svar("live_probe_interval_sec"))
+        ttk.Checkbutton(sc, text="В auto при 403 открывать настоящий Chrome/Edge",
+                        variable=self._bvar("wb_browser_fallback", True)).grid(
+                            row=7, column=1, sticky="w", pady=3)
+        tk.Label(sc, text="Откроется отдельное окно с собственным профилем Price Hunter. Не закрывай его во время охоты; куки никуда не отправляются",
+                 bg=PANEL, fg=MUT, wraplength=620, justify="left").grid(row=7, column=2, sticky="w", padx=8)
+        self._field(sc, 8, "Путь к Chrome/Edge (необязательно)",
+                    self._svar("wb_browser_path"), width=52)
+        tk.Label(sc, text="Оставь пустым для автопоиска chrome.exe/msedge.exe",
+                 bg=PANEL, fg=MUT).grid(row=8, column=2, sticky="w", padx=8)
+        self._field(sc, 9, "Порт браузера WB", self._svar("wb_browser_port"))
+        self._field(sc, 10, "Ожидание браузера, сек", self._svar("wb_browser_wait_sec"))
+        ttk.Checkbutton(sc, text="Скрытый браузер (headless; проверку WB вручную не пройти)",
+                        variable=self._bvar("wb_browser_headless", False)).grid(
+                            row=11, column=1, sticky="w", pady=3, columnspan=2)
+        self._field(sc, 12, "Пауза между запросами WB, сек", self._svar("wb_request_delay_sec"))
+        self._field(sc, 13, "Повторная проверка LIVE, сек", self._svar("live_probe_interval_sec"))
         self.var_wb_diag = tk.StringVar(value="")
         ttk.Button(sc, text="Сохранить и проверить WB", style="Accent.TButton",
-                   command=lambda: self._diagnose_wb(save_first=True)).grid(row=9, column=1, sticky="w", pady=6)
+                   command=lambda: self._diagnose_wb(save_first=True)).grid(row=14, column=1, sticky="w", pady=6)
+        ttk.Button(sc, text="Открыть браузер WB",
+                   command=lambda: self._open_wb_browser(save_first=True)).grid(row=14, column=2, sticky="w", pady=6, padx=8)
         tk.Label(sc, textvariable=self.var_wb_diag, bg=PANEL, fg=TEXT,
-                 wraplength=980, justify="left").grid(row=10, column=0, columnspan=3, sticky="w", pady=4)
+                 wraplength=980, justify="left").grid(row=15, column=0, columnspan=3, sticky="w", pady=4)
 
         # Detector
         dt = self._section(f, "Детектор аномалий")
@@ -363,14 +381,17 @@ class PriceHunterApp:
         for key in ("mode", "interval_sec", "pages_per_query", "min_discount_pct",
                     "min_drop_vs_history_pct", "min_original_price_rub",
                     "min_saving_rub", "min_score", "alert_cooldown_hours",
-                    "dest", "spp", "wb_transport", "wb_request_delay_sec",
-                    "live_probe_interval_sec", "telegram_chat_id"):
+                    "dest", "spp", "wb_transport", "wb_browser_path",
+                    "wb_browser_port", "wb_browser_wait_sec",
+                    "wb_request_delay_sec", "live_probe_interval_sec",
+                    "telegram_chat_id"):
             self.v[key].set(str(cfg.get(key, "")))
         self.v["telegram_token"].set("")   # never echo the secret back
         self.var_token_hint.set(
             f"сохранён: {pub['telegram_token_masked']}" if pub.get("telegram_token_masked")
             else "ещё не задан")
         for key in ("telegram_enabled", "verify_with_price_history",
+                    "wb_browser_fallback", "wb_browser_headless",
                     "close_to_tray", "start_minimized"):
             self.v[key].set(bool(cfg.get(key)))
         sorts = set(cfg.get("sorts") or [])
@@ -420,10 +441,33 @@ class PriceHunterApp:
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _open_wb_browser(self, save_first: bool = False):
+        if save_first and not self._save_settings():
+            return
+        self.var_wb_diag.set("Открываю отдельный Chrome/Edge для WB…")
+
+        def work():
+            try:
+                info = self.ctrl.open_wb_browser()
+                text = ("Браузер WB открыт. Дождись загрузки Wildberries и, если "
+                        "появится проверка, пройди её именно в этом окне. Затем "
+                        "нажми «Проверить соединение WB». Окно не закрывай во "
+                        f"время охоты. URL: {info.get('url') or ''}")
+                self.root.after(0, lambda: (
+                    self.var_wb_diag.set(text),
+                    messagebox.showinfo("Браузер WB", text)))
+            except Exception as e:
+                text = f"Не удалось открыть браузер WB: {e}"
+                self.root.after(0, lambda: (
+                    self.var_wb_diag.set(text),
+                    messagebox.showwarning("Браузер WB", text)))
+
+        threading.Thread(target=work, daemon=True).start()
+
     def _diagnose_wb(self, save_first: bool = False):
         if save_first and not self._save_settings():
             return
-        self.var_wb_diag.set("Проверяю WB: пробую актуальные endpoint'ы и транспорты…")
+        self.var_wb_diag.set("Проверяю WB: пробую endpoint'ы, httpx, curl_cffi и при необходимости настоящий Chrome/Edge…")
         self.var_wb_warn.set("Проверяю соединение с WB…")
 
         def work():
@@ -617,11 +661,15 @@ class PriceHunterApp:
 
         pub = st["settings"]
         tg_ok = pub.get("telegram_configured") and pub.get("telegram_enabled")
+        chrome = st.get("chrome_transport") or {}
+        chrome_txt = ("найден" if chrome.get("available") else
+                      "не найден")
         self.var_status.set(
             f"Режим: запрошен {requested}, фактически {mode} · "
             f"запросов: {len(pub.get('queries') or [])} · "
             f"интервал: {pub.get('interval_sec')} с · "
             f"транспорт WB: {st.get('wb_transport', 'auto')} · "
+            f"Chrome/Edge: {chrome_txt} · "
             f"последнее сканирование: {_fmt_ts(st.get('last_scan_ts'))} · "
             f"Telegram: {'настроен' if tg_ok else 'НЕ настроен'}"
             + (f" · ошибка: {st['last_error'][:90]}" if st.get("last_error") else ""))

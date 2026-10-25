@@ -83,10 +83,11 @@ def parse_settings_form(raw: Mapping[str, Any], existing: dict) -> dict:
     out["spp"] = _as_int(raw, "spp", "СПП, %", 0, 100)
 
     transport = str(raw.get("wb_transport", "auto")).strip().lower()
-    if transport == "curl_cffi":
-        transport = "browser"
-    if transport not in ("auto", "httpx", "browser"):
-        raise ValueError("Транспорт WB: выбери auto, browser или httpx")
+    transport = {"curl_cffi": "browser", "curl": "browser",
+                 "dom": "chrome", "cdp": "chrome", "edge": "chrome",
+                 "chromium": "chrome"}.get(transport, transport)
+    if transport not in ("auto", "httpx", "browser", "chrome"):
+        raise ValueError("Транспорт WB: выбери auto, chrome, browser или httpx")
     out["wb_transport"] = transport
     if raw.get("wb_request_delay_sec") not in (None, ""):
         out["wb_request_delay_sec"] = _as_float(
@@ -95,6 +96,15 @@ def parse_settings_form(raw: Mapping[str, Any], existing: dict) -> dict:
         out["live_probe_interval_sec"] = _as_int(
             raw, "live_probe_interval_sec", "Повторная проверка LIVE, сек",
             60, 3600)
+    out["wb_browser_fallback"] = bool(raw.get("wb_browser_fallback", True))
+    out["wb_browser_path"] = str(raw.get("wb_browser_path") or "").strip()[:500]
+    out["wb_browser_headless"] = bool(raw.get("wb_browser_headless", False))
+    if raw.get("wb_browser_port") not in (None, ""):
+        out["wb_browser_port"] = _as_int(
+            raw, "wb_browser_port", "Порт браузера WB", 1024, 65535)
+    if raw.get("wb_browser_wait_sec") not in (None, ""):
+        out["wb_browser_wait_sec"] = _as_int(
+            raw, "wb_browser_wait_sec", "Ожидание браузера, сек", 5, 120)
 
     out["verify_with_price_history"] = bool(raw.get("verify_with_price_history", True))
     out["telegram_enabled"] = bool(raw.get("telegram_enabled", True))
@@ -134,8 +144,9 @@ class DesktopController:
     def scan_now(self) -> None:
         self.scanner.trigger()
 
-    def shutdown(self) -> None:
+    def shutdown(self, close_browser: bool = True) -> None:
         self.scanner.stop()
+        self.scanner.close(close_browser=close_browser)
         self.db.close()
 
     # --- data for the GUI -------------------------------------------- #
@@ -175,6 +186,11 @@ class DesktopController:
         """Run the WB connectivity check and return its full verdict
         (ok/outcome/message/hint/attempts) for display in the UI."""
         return self.scanner.diagnose(query)
+
+    def open_wb_browser(self) -> dict:
+        """Open the dedicated Chrome/Edge window so the user can let WB
+        finish its browser check there before rerunning diagnostics."""
+        return self.scanner.open_browser()
 
     def telegram_test(self, token: str | None = None,
                       chat_id: str | None = None) -> tuple[bool, str]:
