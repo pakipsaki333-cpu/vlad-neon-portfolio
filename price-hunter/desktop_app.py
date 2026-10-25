@@ -58,6 +58,16 @@ def _setup_logging() -> None:
                         format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 
+def _configure_stdout() -> None:
+    """Windows CI consoles are often cp1252 and crash on Cyrillic JSON."""
+    if sys.stdout:
+        try:
+            sys.stdout.reconfigure(encoding="utf-8",
+                                   errors="backslashreplace")
+        except Exception:
+            pass
+
+
 def self_test() -> int:
     """Headless engine check (no display needed): force one demo scan."""
     _setup_logging()
@@ -69,6 +79,7 @@ def self_test() -> int:
         result["alerts_in_db"] = len(ctrl.alerts(50))
     finally:
         ctrl.shutdown()
+    _configure_stdout()
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result.get("scanned", 0) > 0 else 1
 
@@ -88,6 +99,7 @@ def diagnose_wb(query: str | None = None) -> int:
     except Exception:
         pass
     if sys.stdout:
+        _configure_stdout()
         print(text)
     return 0 if result.get("ok") else 2
 
