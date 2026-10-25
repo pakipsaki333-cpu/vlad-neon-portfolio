@@ -296,6 +296,7 @@ class WBClient:
     _browser_session: Any = field(default=None, repr=False)
     _prefer_dom_search: bool = field(default=False, repr=False)
     _dom_empty_streak: int = field(default=0, repr=False)
+    _history_cache: dict = field(default_factory=dict, repr=False)
     _search_idx: int = field(default=0, repr=False)
     _card_idx: int = field(default=0, repr=False)
     last_attempts: list[dict] = field(default_factory=list, repr=False)
@@ -679,9 +680,23 @@ class WBClient:
         return []
 
     def history_median(self, nm: int) -> float | None:
+        # The scanner asks this for every "likely" product on every
+        # cycle; with WB's inflated sticker discounts that is hundreds
+        # of identical basket fetches per cycle, which used to add
+        # minutes before the next marketplace even started.  External
+        # price history changes slowly — cache the median for a while.
+        key = int(nm)
+        now = time.time()
+        cached = self._history_cache.get(key)
+        if cached is not None and now - cached[0] < 6 * 3600:
+            return cached[1]
         hist = self.price_history(nm)
         prices = [h["price_rub"] for h in hist if h["price_rub"] > 0]
-        return statistics.median(prices) if len(prices) >= 3 else None
+        result = statistics.median(prices) if len(prices) >= 3 else None
+        if len(self._history_cache) > 5000:
+            self._history_cache.clear()
+        self._history_cache[key] = (now, result)
+        return result
 
     # -- diagnostics --------------------------------------------------- #
     def probe(self, query: str = "наушники") -> dict:

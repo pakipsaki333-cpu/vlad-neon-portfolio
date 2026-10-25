@@ -512,6 +512,44 @@ class MarketplaceScannerTest(unittest.TestCase):
                 scanner.close(close_browser=False)
                 db.close()
 
+    def test_cycle_interleaves_queries_between_marketplaces(self):
+        # Regression: fetching all of WB before Ozon let a long WB DOM
+        # pass (16 queries + price-history processing) starve Ozon for
+        # entire app sessions — the user's Ozon DB stayed at 0 while
+        # Ozon diagnostics passed.  Queries must alternate by source.
+        calls: list[tuple[str, str]] = []
+
+        class RecorderWB(_FakeWBAlert):
+            def search(self, q, page=1, sort="popular"):
+                calls.append(("wb", q))
+                return super().search(q, page=page, sort=sort)
+
+        class RecorderOzon(_FakeOzonOK):
+            def search(self, q, page=1, sort="popular"):
+                calls.append(("ozon", q))
+                return super().search(q, page=page, sort=sort)
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            db = DB(Path(d) / "t.db")
+            try:
+                scanner = Scanner(db, _settings(queries=["q1", "q2"]))
+                _inject(scanner, "wb", RecorderWB())
+                _inject(scanner, "ozon", RecorderOzon())
+                scanner.last_probe_ts = 999_999_999_999
+                result = scanner.scan_once()
+                self.assertEqual(
+                    calls,
+                    [("wb", "q1"), ("ozon", "q1"),
+                     ("wb", "q2"), ("ozon", "q2")])
+                self.assertEqual(result["scanned_ozon"], 1)
+                self.assertEqual(db.stats()["products_ozon"], 1)
+                ozon_status = scanner.status()["marketplaces"]["ozon"]
+                self.assertEqual(ozon_status["last_products"], 1)
+                self.assertIsNotNone(ozon_status["last_scan_ts"])
+            finally:
+                scanner.close(close_browser=False)
+                db.close()
+
     def test_auto_skips_known_down_source_until_reprobe_is_due(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
             db = DB(Path(d) / "t.db")

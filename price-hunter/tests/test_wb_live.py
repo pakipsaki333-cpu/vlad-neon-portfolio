@@ -177,6 +177,24 @@ class ShapeTest(unittest.TestCase):
                 c._transports_for("https://search.wb.ru/search"),
                 ["httpx", "browser", "chrome"])
 
+    def test_history_median_is_cached(self):
+        # The scanner asks for the external history median of every
+        # "likely" product each cycle; without a cache that was
+        # hundreds of identical basket fetches per WB pass.
+        c = FakeClient(lambda t, u, p, n: (200, {"products": [RAW]}))
+        calls = []
+
+        def fake_history(nm):
+            calls.append(nm)
+            return [{"ts": 1, "price_rub": 100.0},
+                    {"ts": 2, "price_rub": 200.0},
+                    {"ts": 3, "price_rub": 300.0}]
+
+        c.price_history = fake_history
+        self.assertEqual(c.history_median(123), 200.0)
+        self.assertEqual(c.history_median(123), 200.0)
+        self.assertEqual(calls, [123])
+
     def test_card_detail_v4_shape(self):
         seen_urls = {}
 

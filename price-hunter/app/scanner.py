@@ -475,22 +475,44 @@ class Scanner:
 
     # -- marketplace fetching ------------------------------------------- #
     def _fetch_marketplace(self, marketplace: str, cfg: dict,
-                           client: Any) -> tuple[list[dict], list[str]]:
+                           client: Any, *,
+                           queries: list[str] | None = None,
+                           seen: set[int] | None = None,
+                           fetch_state: dict[str, Any] | None = None,
+                           query_start: int = 1,
+                           query_total: int | None = None,
+                           ) -> tuple[list[dict], list[str]]:
+        """Fetch products for one marketplace over the given queries.
+
+        ``seen``/``fetch_state`` can be shared across calls so a scan
+        cycle may interleave queries between marketplaces (WB q1,
+        Ozon q1, WB q2, …) while de-duplication, progress counters
+        and the consecutive-failure cut-off stay per-source cumulative.
+        """
         products: list[dict[str, Any]] = []
         failures: list[str] = []
-        seen: set[int] = set()
+        if seen is None:
+            seen = set()
+        if fetch_state is None:
+            fetch_state = {}
+        fetch_state.setdefault("consecutive_failures", 0)
+        fetch_state.setdefault("stop", False)
+        fetch_state.setdefault("any_products", False)
+        fetch_state.setdefault("found", 0)
+        fetch_state.setdefault("failures", 0)
         delay_key = "wb_request_delay_sec" if marketplace == "wb" \
             else "ozon_request_delay_sec"
         delay = float(cfg.get(delay_key, 1.2 if marketplace == "wb" else 3.0))
         label = _LABELS[marketplace]
-        consecutive_failures = 0
-        stop_fetching = False
-        queries = list(cfg.get("queries") or [])
-        for q_idx, query in enumerate(queries, 1):
-            if self._stop.is_set() or stop_fetching:
+        query_list = list(queries) if queries is not None \
+            else list(cfg.get("queries") or [])
+        total = query_total or len(query_list)
+        for offset, query in enumerate(query_list):
+            q_idx = query_start + offset
+            if self._stop.is_set() or fetch_state["stop"]:
                 break
             for sort in cfg.get("sorts", ["popular"]):
-                if stop_fetching or self._stop.is_set():
+                if fetch_state["stop"] or self._stop.is_set():
                     break
                 first_id_page1: int | None = None
                 for page in range(1, int(cfg.get("pages_per_query", 1)) + 1):
@@ -499,9 +521,9 @@ class Scanner:
                     self._progress = {
                         "marketplace": marketplace, "label": label,
                         "query": query, "query_idx": q_idx,
-                        "query_total": len(queries), "sort": sort,
-                        "page": page, "found": len(products),
-                        "failures": len(failures),
+                        "query_total": total, "sort": sort,
+                        "page": page, "found": fetch_state["found"],
+                        "failures": fetch_state["failures"],
                     }
                     try:
                         batch = client.search(query, page=page, sort=sort) or []
@@ -509,15 +531,18 @@ class Scanner:
                         msg = (f"{label} {query!r}/{sort}/стр.{page}: "
                                f"{str(e)[:240]}")
                         failures.append(msg)
+                        fetch_state["failures"] += 1
                         log.warning("%s search failed (%s)", label, msg)
-                        consecutive_failures += 1
-                        if (consecutive_failures >= 3 and not products) \
-                                or consecutive_failures >= 5:
-                            stop_fetching = True
+                        fetch_state["consecutive_failures"] += 1
+                        if (fetch_state["consecutive_failures"] >= 3
+                                and not fetch_state["any_products"]) \
+                                or fetch_state["consecutive_failures"] >= 5:
+                            fetch_state["stop"] = True
                         break
-                    consecutive_failures = 0
+                    fetch_state["consecutive_failures"] = 0
                     if not batch:
                         break
+                    fetch_state["any_products"] = True
                     if page == 1:
                         first_id_page1 = batch[0]["nm"]
                     elif batch[0]["nm"] == first_id_page1:
@@ -528,17 +553,20 @@ class Scanner:
                         if product["nm"] not in seen:
                             seen.add(product["nm"])
                             products.append(product)
+                            fetch_state["found"] += 1
                     time.sleep(max(0.0, delay))
         return products, failures
 
     def _apply_scan_result(self, marketplace: str, products: list[dict],
-                           failures: list[str]) -> None:
+                           failures: list[str],
+                           reset_counts: bool = True) -> None:
         cfg = self.settings.get()
         now = int(time.time())
         state = self._state(marketplace)
         state.update(last_scan_ts=now, last_products=len(products),
-                     request_failures=len(failures), last_new=0,
-                     last_alerts=0)
+                     request_failures=len(failures))
+        if reset_counts:
+            state.update(last_new=0, last_alerts=0)
         if products:
             state.update(available=True, failures=0, next_probe_ts=None)
             state["last_error"] = (
@@ -655,9 +683,10 @@ class Scanner:
             total_found = 0
             if mode == "live":
                 requested = cfg.get("mode", "auto")
+                active: list[str] = []
+                clients: dict[str, Any] = {}
+                accumulated: dict[str, dict[str, Any]] = {}
                 for marketplace in enabled:
-                    if self._stop.is_set():
-                        break
                     state = self._state(marketplace)
                     next_probe = state.get("next_probe_ts")
                     if (requested == "auto" and state["available"] is False
@@ -672,23 +701,59 @@ class Scanner:
                         }
                         continue
                     client = self._client_for(marketplace)
+                    clients[marketplace] = client
                     live_clients[marketplace] = client
-                    found, failures = self._fetch_marketplace(
-                        marketplace, cfg, client)
-                    self._apply_scan_result(marketplace, found, failures)
+                    active.append(marketplace)
+                    # Chunk processing below increments these as alerts
+                    # happen, so reset them up front (the end-of-cycle
+                    # _apply_scan_result must not wipe them again).
+                    state.update(last_new=0, last_alerts=0)
                     source_results[marketplace] = {
-                        "products": len(found), "new": 0, "alerts": 0,
-                        "request_failures": len(failures),
+                        "products": 0, "new": 0, "alerts": 0,
+                        "request_failures": 0,
                     }
-                    total_found += len(found)
-                    request_failures.extend(failures)
-                    # Alert on this source now; the next marketplace may
-                    # legitimately take minutes in a visible browser.
-                    done, fresh, made = self._process_products(
-                        found, cfg, mode, live_clients, source_results)
-                    scanned += done
-                    new_products += fresh
-                    alerts_made += made
+                    accumulated[marketplace] = {
+                        "products": [], "failures": [], "seen": set(),
+                        "fetch_state": {},
+                    }
+                # Interleave marketplaces by query (WB q1 → Ozon q1 →
+                # WB q2 …) and process/alert each chunk immediately.
+                # Fetching one source completely before the other let a
+                # long WB DOM pass (plus price-history processing of
+                # hundreds of items) starve Ozon for a whole cycle —
+                # after app restarts Ozon was effectively never reached
+                # and its DB stayed empty while its diagnostics passed.
+                queries = list(cfg.get("queries") or [])
+                for q_idx, query in enumerate(queries, 1):
+                    if self._stop.is_set():
+                        break
+                    for marketplace in active:
+                        if self._stop.is_set():
+                            break
+                        acc = accumulated[marketplace]
+                        found, failures = self._fetch_marketplace(
+                            marketplace, cfg, clients[marketplace],
+                            queries=[query], seen=acc["seen"],
+                            fetch_state=acc["fetch_state"],
+                            query_start=q_idx, query_total=len(queries))
+                        acc["products"].extend(found)
+                        acc["failures"].extend(failures)
+                        source_results[marketplace]["products"] = len(
+                            acc["products"])
+                        source_results[marketplace]["request_failures"] = len(
+                            acc["failures"])
+                        total_found += len(found)
+                        request_failures.extend(failures)
+                        done, fresh, made = self._process_products(
+                            found, cfg, mode, live_clients, source_results)
+                        scanned += done
+                        new_products += fresh
+                        alerts_made += made
+                for marketplace in active:
+                    acc = accumulated[marketplace]
+                    self._apply_scan_result(
+                        marketplace, acc["products"], acc["failures"],
+                        reset_counts=False)
                 if not total_found and request_failures:
                     labels = ", ".join(_LABELS[m] for m in enabled)
                     raise RuntimeError(

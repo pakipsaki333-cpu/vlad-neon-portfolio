@@ -824,10 +824,18 @@ class PriceHunterApp:
         chrome = st.get("chrome_transport") or {}
         chrome_txt = ("найден" if chrome.get("available") else
                       "не найден")
+        last_by_source = " · ".join(
+            f"{_marketplace_label(m)}: "
+            + (f"{(markets.get(m) or {}).get('last_products', 0)} тов. "
+               f"({_fmt_ts((markets.get(m) or {}).get('last_scan_ts'))})"
+               if (markets.get(m) or {}).get("last_scan_ts")
+               else "ещё не сканировался")
+            for m in enabled_markets)
         self.var_status.set(
             f"Режим: запрошен {requested}, фактически {mode} · "
             f"источники: {enabled_txt or '—'} · "
             f"товаров WB/Ozon: {s.get('products_wb', 0)}/{s.get('products_ozon', 0)} · "
+            f"последний проход — {last_by_source} · "
             f"запросов: {len(pub.get('queries') or [])} · "
             f"интервал: {pub.get('interval_sec')} с · "
             f"транспорт WB: {st.get('wb_transport', 'auto')} · "
