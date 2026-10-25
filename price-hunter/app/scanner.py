@@ -61,6 +61,10 @@ class Scanner:
         self._scan_now = threading.Event()
         self.running = False
         self.scanning = False
+        # Live per-request progress of the current scan (marketplace,
+        # query position, found so far) so the GUI can show movement
+        # instead of an opaque "scanning…" for minutes.
+        self._progress: dict[str, Any] | None = None
         self.effective_mode = "—"          # 'live' | 'demo' after first probe
         self.mode_reason: str | None = None
         self.last_probe: dict | None = None
@@ -481,16 +485,24 @@ class Scanner:
         label = _LABELS[marketplace]
         consecutive_failures = 0
         stop_fetching = False
-        for query in cfg.get("queries") or []:
+        queries = list(cfg.get("queries") or [])
+        for q_idx, query in enumerate(queries, 1):
             if self._stop.is_set() or stop_fetching:
                 break
             for sort in cfg.get("sorts", ["popular"]):
-                if stop_fetching:
+                if stop_fetching or self._stop.is_set():
                     break
                 first_id_page1: int | None = None
                 for page in range(1, int(cfg.get("pages_per_query", 1)) + 1):
                     if self._stop.is_set():
                         break
+                    self._progress = {
+                        "marketplace": marketplace, "label": label,
+                        "query": query, "query_idx": q_idx,
+                        "query_total": len(queries), "sort": sort,
+                        "page": page, "found": len(products),
+                        "failures": len(failures),
+                    }
                     try:
                         batch = client.search(query, page=page, sort=sort) or []
                     except Exception as e:
@@ -557,6 +569,8 @@ class Scanner:
         notifier = TelegramNotifier(
             cfg["telegram_token"], cfg["telegram_chat_id"])
         for product in products:
+            if self._stop.is_set():
+                break  # paused mid-processing; next scan re-sees them
             marketplace = _normalize_marketplace(
                 product.get("marketplace"), product)
             product["marketplace"] = marketplace
@@ -732,6 +746,7 @@ class Scanner:
             self.last_error = error
         finally:
             self.scanning = False
+            self._progress = None
             self.last_scan_ts = int(time.time())
             self.db.finish_run(run_id, scanned, new_products, alerts_made, error)
         return {
@@ -821,6 +836,8 @@ class Scanner:
         return {
             "running": self.running,
             "scanning": self.scanning,
+            "stopping": bool(self.running and self._stop.is_set()),
+            "progress": self._progress if self.scanning else None,
             "mode": requested,
             "requested_mode": requested,
             "effective_mode": self.effective_mode,

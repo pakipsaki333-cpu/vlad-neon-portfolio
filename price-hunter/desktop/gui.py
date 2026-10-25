@@ -64,6 +64,7 @@ class PriceHunterApp:
         self._alert_by_iid: dict[str, dict] = {}
         self._toasts: list[tk.Toplevel] = []
         self._tray_hint_shown = False
+        self._dialog_busy = False
         self.v: dict[str, tk.Variable] = {}
 
         root.title("Price Hunter — ценовые ошибки WB + Ozon")
@@ -439,6 +440,26 @@ class PriceHunterApp:
         self.tree_runs.pack(fill="both", expand=True)
 
     # ------------------------------ handlers -------------------------- #
+    def _info_dialog(self, title: str, text: str, warn: bool = False):
+        """Show at most one modal info dialog at a time.
+
+        Windows message boxes are modal: while one is open the main
+        window's buttons (Сканировать сейчас / Пауза) do not react,
+        and stacked «Проверка WB» + «Проверка Ozon» dialogs made the
+        app look frozen.  Extra completions still update their label
+        text (done by the caller), they just skip the popup.
+        """
+        if self._dialog_busy:
+            return
+        self._dialog_busy = True
+        try:
+            if warn:
+                messagebox.showwarning(title, text)
+            else:
+                messagebox.showinfo(title, text)
+        finally:
+            self._dialog_busy = False
+
     def _toggle(self):
         self.ctrl.toggle_scanner()
         self._poll(once=True)
@@ -532,12 +553,12 @@ class PriceHunterApp:
                         f"URL: {info.get('url') or ''}")
                 self.root.after(0, lambda: (
                     diag_var.set(text) if diag_var is not None else None,
-                    messagebox.showinfo(f"Браузер {label}", text)))
+                    self._info_dialog(f"Браузер {label}", text)))
             except Exception as e:
                 text = f"Не удалось открыть браузер {label}: {e}"
                 self.root.after(0, lambda: (
                     diag_var.set(text) if diag_var is not None else None,
-                    messagebox.showwarning(f"Браузер {label}", text)))
+                    self._info_dialog(f"Браузер {label}", text, warn=True)))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -612,9 +633,9 @@ class PriceHunterApp:
         if diag_var is not None:
             diag_var.set(text)
         if res.get("ok"):
-            messagebox.showinfo(f"Проверка {label}", text)
+            self._info_dialog(f"Проверка {label}", text)
         else:
-            messagebox.showwarning(f"Проверка {label}", text)
+            self._info_dialog(f"Проверка {label}", text, warn=True)
         self._poll(once=True)
 
     def _selected_alert(self) -> dict | None:
@@ -770,8 +791,17 @@ class PriceHunterApp:
             badge = "● ПРОВЕРКА МАРКЕТПЛЕЙСОВ…"
         self.badge_mode.configure(
             text=badge, fg=GREEN if mode == "live" else AMBER)
-        if st["scanning"]:
-            run_txt = "сканирую…"
+        if st.get("stopping"):
+            run_txt = "останавливаю после текущего запроса…"
+        elif st["scanning"]:
+            prog = st.get("progress") or {}
+            if prog:
+                run_txt = (
+                    f"сканирую… {_marketplace_label(prog.get('marketplace', 'wb'))} "
+                    f"{prog.get('query_idx', '?')}/{prog.get('query_total', '?')} "
+                    f"«{prog.get('query', '')}» · найдено {prog.get('found', 0)}")
+            else:
+                run_txt = "сканирую…"
         elif st["running"] and st.get("next_scan_ts"):
             run_txt = f"след. проход через {max(0, st['next_scan_ts'] - int(time.time()))} с"
         elif st["running"]:

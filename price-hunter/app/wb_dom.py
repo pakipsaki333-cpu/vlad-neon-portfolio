@@ -366,6 +366,35 @@ class ChromeBrowserSession:
         except Exception:
             return False
 
+    def _launch_args(self) -> list[str]:
+        args = [
+            self.executable,
+            f"--remote-debugging-port={self.port}",
+            "--remote-debugging-address=127.0.0.1",
+            "--remote-allow-origins=*",
+            f"--user-data-dir={self.profile_dir}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-blink-features=AutomationControlled",
+            # WB and Ozon live in separate tabs of this one window, so at
+            # any moment one marketplace's tab is in the background.
+            # Without these flags Chrome throttles timers/rendering in
+            # hidden tabs and the background marketplace's search grid
+            # may not render within the wait window at all — the scan
+            # then grinds through full timeouts and looks frozen.
+            "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
+            "--disable-features=IntensiveWakeUpThrottling,"
+            "CalculateNativeWinOcclusion",
+            "--window-size=1280,900",
+            "--window-position=40,40",
+        ]
+        if self.headless:
+            args.append("--headless=new")
+        args.append(self.home_url)
+        return args
+
     def _launch(self) -> None:
         if self._proc is not None and self._proc.poll() is None and self._cdp_ready():
             return
@@ -382,21 +411,7 @@ class ChromeBrowserSession:
                 "В сборке отсутствует websocket-client, поэтому настоящий "
                 "браузерный транспорт недоступен.")
         self.profile_dir.mkdir(parents=True, exist_ok=True)
-        args = [
-            self.executable,
-            f"--remote-debugging-port={self.port}",
-            "--remote-debugging-address=127.0.0.1",
-            "--remote-allow-origins=*",
-            f"--user-data-dir={self.profile_dir}",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-blink-features=AutomationControlled",
-            "--window-size=1280,900",
-            "--window-position=40,40",
-        ]
-        if self.headless:
-            args.append("--headless=new")
-        args.append(self.home_url)
+        args = self._launch_args()
         kwargs: dict[str, Any] = {"stdout": subprocess.DEVNULL,
                                   "stderr": subprocess.DEVNULL,
                                   "stdin": subprocess.DEVNULL,
@@ -496,6 +511,14 @@ class ChromeBrowserSession:
             raise BrowserSessionError(f"Не удалось подключиться к браузеру: {e!r}") from e
         self._send("Page.enable")
         self._send("Runtime.enable")
+        try:
+            # The tab may sit in the background while the user looks at
+            # the other marketplace; focus emulation keeps focus-gated
+            # page logic (lazy hydration, deferred rendering) running.
+            self._send("Emulation.setFocusEmulationEnabled",
+                       {"enabled": True})
+        except BrowserSessionError:
+            pass  # older engines: launch-time anti-throttling still applies
 
     def ensure_ready(self, home_url: str | None = None) -> dict[str, Any]:
         with self._lock:

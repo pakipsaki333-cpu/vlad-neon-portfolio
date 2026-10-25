@@ -632,6 +632,7 @@ class OzonClient:
     _browser_session: Any = field(default=None, repr=False)
     _browser_settled: bool = field(default=False, repr=False)
     _prefer_dom_search: bool = field(default=False, repr=False)
+    _dom_empty_streak: int = field(default=0, repr=False)
     last_attempts: list[dict] = field(default_factory=list, repr=False)
     last_endpoint: str | None = field(default=None, repr=False)
     last_transport: str | None = field(default=None, repr=False)
@@ -848,13 +849,28 @@ class OzonClient:
             products, recognized_empty = self._search_dom(
                 query, page, sort, attempts)
             if products:
+                self._dom_empty_streak = 0
                 self.last_attempts = attempts
                 self.last_endpoint = attempts[-1].get("endpoint")
                 self.last_transport = "chrome-dom"
                 return products
             if recognized_empty:
+                self._dom_empty_streak = 0
                 self.last_attempts = attempts
                 return []
+            # Mirrors WBClient: a single flaky empty render must not
+            # re-impose the full endpoint/transport matrix plus a
+            # second DOM wait on every query.  Fail fast; retest the
+            # matrix only after several consecutive empty DOM reads.
+            self._dom_empty_streak += 1
+            if self._dom_empty_streak < 3:
+                self.last_attempts = attempts
+                raise OzonUnavailable(
+                    f"Ozon не отдал товары по запросу {query!r}: "
+                    "отрисованная выдача пуста (возможно, вкладка Ozon в "
+                    "фоне не успела отрисоваться): "
+                    + _summarize_attempts(attempts), attempts=attempts)
+            self._dom_empty_streak = 0
             self._prefer_dom_search = False
 
         site_path = self._search_path(query, page, sort)
@@ -872,6 +888,7 @@ class OzonClient:
                     for product in products:
                         product["source_transport"] = attempt["transport"]
                     attempts.append(attempt)
+                    self._dom_empty_streak = 0
                     self.last_attempts = attempts
                     self.last_endpoint = endpoint
                     self.last_transport = attempt["transport"]
@@ -890,6 +907,7 @@ class OzonClient:
                 query, page, sort, attempts)
             if products:
                 self._prefer_dom_search = True
+                self._dom_empty_streak = 0
                 self.last_attempts = attempts
                 self.last_endpoint = attempts[-1].get("endpoint")
                 self.last_transport = "chrome-dom"

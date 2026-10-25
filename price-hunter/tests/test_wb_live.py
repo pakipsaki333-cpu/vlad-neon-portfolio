@@ -23,8 +23,8 @@ from app.db import DB  # noqa: E402
 from app.scanner import Scanner  # noqa: E402
 from app.wb_client import (WBClient, WBUnavailable, _Response,  # noqa: E402
                            extract_products, normalize_product)
-from app.wb_dom import (find_browser_executable,  # noqa: E402
-                        parse_dom_search_items)
+from app.wb_dom import (ChromeBrowserSession,  # noqa: E402
+                        find_browser_executable, parse_dom_search_items)
 
 RAW = {"id": 1097975275, "name": "Наушники X", "brand": "Brand",
        "supplier": "Seller", "reviewRating": 4.9, "feedbacks": 123,
@@ -56,6 +56,24 @@ class DOMFallbackClient(FakeClient):
         product = normalize_product(RAW)
         product["source_transport"] = "chrome-dom"
         return [product], False
+
+
+class FlakyDOMClient(FakeClient):
+    """DOM renders an empty grid (e.g. throttled background tab)."""
+
+    def __init__(self, handler, transport="auto"):
+        super().__init__(handler, transport=transport)
+        self.dom_calls = 0
+
+    def _search_dom(self, query, page, sort, attempts):
+        self.dom_calls += 1
+        attempts.append({
+            "endpoint": "https://www.wildberries.ru/catalog/0/search.aspx",
+            "transport": "chrome-dom", "status": 200,
+            "outcome": "bad_shape", "shape": "rendered-dom",
+            "raw_products": 0, "products": 0,
+        })
+        return [], False
 
 
 class ShapeTest(unittest.TestCase):
@@ -123,6 +141,33 @@ class ShapeTest(unittest.TestCase):
             self.assertEqual(len(c.search("наушники sony")), 1)
         self.assertEqual(c.calls, [])
 
+    def test_flaky_empty_dom_fails_fast_without_full_matrix(self):
+        # Regression: with WB and Ozon in separate tabs, one flaky
+        # empty render of the background WB tab used to flip the
+        # client out of DOM mode, so every query paid the full
+        # endpoint/transport matrix plus a second DOM wait and whole
+        # scans looked frozen.  DOM mode must survive single empties.
+        c = FlakyDOMClient(lambda t, u, p, n: (403, "Forbidden"))
+        c._prefer_dom_search = True
+        with mock.patch.object(wbc, "chrome_available", return_value=True), \
+                mock.patch.object(wbc, "curl_cffi_available", return_value=True):
+            for expected_streak in (1, 2):
+                c.calls.clear()
+                with self.assertRaises(WBUnavailable):
+                    c.search("наушники")
+                self.assertEqual(c.calls, [])  # API matrix not replayed
+                self.assertTrue(c._prefer_dom_search)
+                self.assertEqual(c._dom_empty_streak, expected_streak)
+            # Third consecutive empty retests the matrix once, then
+            # gives up on DOM preference instead of grinding forever.
+            c.calls.clear()
+            with self.assertRaises(WBUnavailable):
+                c.search("наушники")
+            self.assertTrue(c.calls)
+            self.assertFalse(c._prefer_dom_search)
+            self.assertEqual(c._dom_empty_streak, 0)
+            self.assertEqual(c.dom_calls, 4)  # 3 prefer tries + 1 final
+
     def test_auto_transport_chain_includes_real_chrome_last(self):
         c = FakeClient(lambda t, u, p, n: (200, {"products": [RAW]}),
                        transport="auto")
@@ -145,6 +190,19 @@ class ShapeTest(unittest.TestCase):
 
 
 class BrowserDOMTest(unittest.TestCase):
+    def test_launch_args_disable_background_throttling(self):
+        # WB and Ozon own separate tabs; the background one must keep
+        # rendering/timers alive or its DOM search stalls the scan.
+        session = ChromeBrowserSession(executable="chrome-stub")
+        session.executable = "chrome-stub"  # normally resolved in _launch()
+        args = session._launch_args()
+        self.assertIn("--disable-background-timer-throttling", args)
+        self.assertIn("--disable-backgrounding-occluded-windows", args)
+        self.assertIn("--disable-renderer-backgrounding", args)
+        self.assertTrue(any(
+            a.startswith("--disable-features=IntensiveWakeUpThrottling")
+            for a in args))
+
     def test_parse_rendered_tile_text(self):
         items = [{
             "id": 123456,
@@ -233,6 +291,31 @@ class ScannerResilienceTest(unittest.TestCase):
                 self.assertEqual(result["request_failures"], 1)
                 self.assertIn("Частично", result["error"])
                 self.assertEqual(db.stats()["products_seen"], 1)
+            finally:
+                db.close()
+
+    def test_scan_reports_progress_and_clears_it(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            db = DB(Path(d) / "t.db")
+            try:
+                sc = self._scanner(db, _settings())
+                seen: list[dict | None] = []
+                dummy = sc._client_cache
+                original = dummy.search
+
+                def spy(q, page=1, sort="popular"):
+                    seen.append(dict(sc._progress) if sc._progress else None)
+                    return original(q, page=page, sort=sort)
+
+                dummy.search = spy
+                sc.scan_once()
+                self.assertTrue(seen and seen[0] is not None)
+                self.assertEqual(seen[0]["marketplace"], "wb")
+                self.assertEqual(seen[0]["query_total"], 2)
+                self.assertEqual(seen[0]["query"], "bad")
+                status = sc.status()
+                self.assertIsNone(status["progress"])
+                self.assertFalse(status["stopping"])
             finally:
                 db.close()
 

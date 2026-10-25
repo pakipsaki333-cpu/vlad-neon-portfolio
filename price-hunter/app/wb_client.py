@@ -295,6 +295,7 @@ class WBClient:
     _curl_session: Any = field(default=None, repr=False)
     _browser_session: Any = field(default=None, repr=False)
     _prefer_dom_search: bool = field(default=False, repr=False)
+    _dom_empty_streak: int = field(default=0, repr=False)
     _search_idx: int = field(default=0, repr=False)
     _card_idx: int = field(default=0, repr=False)
     last_attempts: list[dict] = field(default_factory=list, repr=False)
@@ -528,13 +529,31 @@ class WBClient:
             dom_products, dom_empty = self._search_dom(
                 query, page, sort, attempts)
             if dom_products:
+                self._dom_empty_streak = 0
                 self.last_attempts = attempts
                 self.last_endpoint = attempts[-1].get("endpoint")
                 self.last_transport = "chrome-dom"
                 return dom_products
             if dom_empty:
+                self._dom_empty_streak = 0
                 self.last_attempts = attempts
                 return []
+            # One flaky empty render (e.g. the WB tab was in the
+            # background and its grid rendered slowly) must not throw
+            # every following query back into the full endpoint/
+            # transport matrix plus a second DOM wait — that multiplied
+            # a single search to over a minute and made whole scans
+            # look frozen.  Fail this query fast and only retest the
+            # API matrix after several consecutive empty DOM reads.
+            self._dom_empty_streak += 1
+            if self._dom_empty_streak < 3:
+                self.last_attempts = attempts
+                raise WBUnavailable(
+                    f"WB не отдал товары по запросу {query!r}: "
+                    "отрисованная выдача пуста (возможно, вкладка WB в "
+                    "фоне не успела отрисоваться): "
+                    + _summarize_attempts(attempts), attempts=attempts)
+            self._dom_empty_streak = 0
             self._prefer_dom_search = False
         order = (SEARCH_ENDPOINTS[self._search_idx:]
                  + SEARCH_ENDPOINTS[: self._search_idx])
@@ -567,6 +586,7 @@ class WBClient:
                     attempt["products"] = len(products)
                     if products:
                         attempts.append(attempt)
+                        self._dom_empty_streak = 0
                         self._search_idx = SEARCH_ENDPOINTS.index(url)
                         self.last_attempts, self.last_endpoint = attempts, url
                         self.last_transport = attempt["transport"]
@@ -585,6 +605,7 @@ class WBClient:
                 query, page, sort, attempts)
             if dom_products:
                 self._prefer_dom_search = True
+                self._dom_empty_streak = 0
                 self.last_attempts = attempts
                 self.last_endpoint = attempts[-1].get("endpoint")
                 self.last_transport = "chrome-dom"

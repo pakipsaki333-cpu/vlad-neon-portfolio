@@ -15,7 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.config import Settings  # noqa: E402
 from app.db import DB  # noqa: E402
 from app.ozon_client import (  # noqa: E402
-    OzonClient, OzonUnavailable, parse_composer_search, parse_ozon_dom_items)
+    OzonClient, OzonUnavailable, _Response as _OzonResponse,
+    parse_composer_search, parse_ozon_dom_items)
 from app.scanner import Scanner  # noqa: E402
 from app.telegram import alert_text  # noqa: E402
 from app.wb_client import WBUnavailable  # noqa: E402
@@ -169,6 +170,42 @@ class OzonParserTest(unittest.TestCase):
         info = ozon.bring_to_front()
         self.assertEqual(sent, ["Page.bringToFront"])
         self.assertEqual(info["url"], "https://www.ozon.ru/")
+
+    def test_flaky_empty_dom_fails_fast_without_full_matrix(self):
+        class FlakyOzon(OzonClient):
+            def __init__(self):
+                super().__init__(transport="chrome")
+                self.raw_calls = 0
+                self.dom_calls = 0
+
+            def _raw_get(self, transport, url, params):
+                self.raw_calls += 1
+                return _OzonResponse(
+                    status_code=403, text="", headers={}, url=url,
+                    transport=transport, elapsed_ms=1)
+
+            def _search_dom(self, query, page, sort, attempts):
+                self.dom_calls += 1
+                attempts.append({
+                    "endpoint": "https://www.ozon.ru/search/",
+                    "transport": "chrome-dom", "status": 200,
+                    "outcome": "bad_shape", "products": 0})
+                return [], False
+
+        client = FlakyOzon()
+        client._prefer_dom_search = True
+        for expected_streak in (1, 2):
+            with self.assertRaises(OzonUnavailable):
+                client.search("наушники")
+            self.assertEqual(client.raw_calls, 0)  # matrix not replayed
+            self.assertTrue(client._prefer_dom_search)
+            self.assertEqual(client._dom_empty_streak, expected_streak)
+        with self.assertRaises(OzonUnavailable):
+            client.search("наушники")
+        self.assertGreater(client.raw_calls, 0)
+        self.assertFalse(client._prefer_dom_search)
+        self.assertEqual(client._dom_empty_streak, 0)
+        self.assertEqual(client.dom_calls, 4)
 
     def test_search_falls_back_to_rendered_dom(self):
         class FakeResponse:
