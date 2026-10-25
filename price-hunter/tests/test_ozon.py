@@ -132,6 +132,44 @@ class OzonParserTest(unittest.TestCase):
         self.assertIs(session._lock, same_endpoint._lock)
         self.assertIsNot(session._lock, other_endpoint._lock)
 
+    def test_each_marketplace_keeps_its_own_browser_tab(self):
+        def page(tid, url):
+            return {"id": tid, "type": "page", "url": url,
+                    "webSocketDebuggerUrl": f"ws://127.0.0.1/{tid}"}
+
+        wb_tab = page("wb", "https://www.wildberries.ru/catalog/0/search.aspx")
+        ozon_tab = page("ozon", "https://www.ozon.ru/search/?text=iphone")
+        ozon = ChromeBrowserSession(home_url=OZON_HOME)
+        wb = ChromeBrowserSession()
+
+        # Each session adopts its own marketplace's tab, in any order.
+        self.assertEqual(ozon._select_target([wb_tab, ozon_tab])["id"], "ozon")
+        self.assertEqual(wb._select_target([ozon_tab, wb_tab])["id"], "wb")
+        # Never steal the other marketplace's tab: caller creates a new one.
+        self.assertIsNone(ozon._select_target([wb_tab]))
+        self.assertIsNone(wb._select_target([ozon_tab]))
+        # A blank tab may be adopted; an already-owned tab wins overall.
+        blank = page("blank", "about:blank")
+        self.assertEqual(ozon._select_target([wb_tab, blank])["id"], "blank")
+        ozon._target_id = "ozon"
+        self.assertEqual(
+            ozon._select_target([page("ozon2", "https://www.ozon.ru/"),
+                                 ozon_tab])["id"], "ozon")
+        # Domain checks are registrable-domain based, not substring based.
+        self.assertTrue(ozon._is_home_url("https://ozon.ru/"))
+        self.assertTrue(ozon._is_home_url("https://api.ozon.ru/x"))
+        self.assertFalse(ozon._is_home_url("https://www.ozon.ru.example/"))
+        self.assertFalse(wb._is_home_url("https://www.ozon.ru/"))
+
+        # Explicit "open browser" activates only its own tab.
+        sent = []
+        ozon.ensure_ready = lambda home_url=None: {"url": "https://www.ozon.ru/"}
+        ozon._send = lambda method, params=None: sent.append(method) or {}
+        ozon.evaluate = lambda expression: "https://www.ozon.ru/"
+        info = ozon.bring_to_front()
+        self.assertEqual(sent, ["Page.bringToFront"])
+        self.assertEqual(info["url"], "https://www.ozon.ru/")
+
     def test_search_falls_back_to_rendered_dom(self):
         class FakeResponse:
             status_code = 200

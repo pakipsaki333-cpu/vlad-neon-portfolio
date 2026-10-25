@@ -666,7 +666,7 @@ class OzonClient:
             and chrome_available(self.browser_executable))
 
     def open_browser_session(self) -> dict:
-        return self._real_browser_session().ensure_ready(OZON_HOME)
+        return self._real_browser_session().bring_to_front(OZON_HOME)
 
     def close_browser(self) -> None:
         if self._browser_session is not None:

@@ -327,8 +327,8 @@ class WBClient:
             self.transport == "auto" and self.browser_fallback)
 
     def open_browser_session(self) -> dict:
-        """Open/warm the visible dedicated Chrome/Edge window for WB."""
-        return self._real_browser_session().ensure_ready()
+        """Open/warm WB's own tab in the dedicated Chrome/Edge window."""
+        return self._real_browser_session().bring_to_front()
 
     def close_browser(self) -> None:
         """Terminate the dedicated browser if this app launched it."""

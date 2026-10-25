@@ -44,9 +44,11 @@ HTML_OZON = """
 class RealBrowserSmokeTest(unittest.TestCase):
     def test_cdp_navigation_and_tile_extraction(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            profile = str(Path(d) / "profile")
             session = ChromeBrowserSession(
-                profile_dir=str(Path(d) / "profile"), port=9333,
+                profile_dir=profile, port=9333,
                 headless=True, wait_sec=30, timeout=30)
+            session2 = None
             try:
                 session._connect()
                 session.navigate(
@@ -59,17 +61,31 @@ class RealBrowserSmokeTest(unittest.TestCase):
                 self.assertEqual(products[0]["sale_price_rub"], 9990.0)
                 self.assertEqual(products[0]["price_rub"], 33990.0)
 
-                session.navigate(
+                # A second marketplace session on the same browser/profile
+                # must get its OWN tab, never navigate the first tab away
+                # (regression: opening Ozon flipped straight back to WB).
+                session2 = ChromeBrowserSession(
+                    profile_dir=profile, port=9333, headless=True,
+                    wait_sec=30, timeout=30, home_url="about:blank")
+                session2._connect()
+                self.assertIsNotNone(session2._target_id)
+                self.assertNotEqual(session2._target_id, session._target_id)
+                session2.navigate(
                     "data:text/html;charset=utf-8," + quote(HTML_OZON),
                     wait_selector='a[href*="/product/"]')
-                payload = session.evaluate(_OZON_SEARCH_EXTRACT_JS)
+                payload = session2.evaluate(_OZON_SEARCH_EXTRACT_JS)
                 products = parse_ozon_dom_items(payload.get("items") or [])
                 self.assertEqual(len(products), 1)
                 self.assertEqual(products[0]["marketplace"], "ozon")
                 self.assertEqual(products[0]["sku"], 987654)
                 self.assertEqual(products[0]["sale_price_rub"], 1299.0)
                 self.assertEqual(products[0]["price_rub"], 4999.0)
+                # The first tab still shows its own page afterwards.
+                self.assertIn("detail.aspx",
+                              str(session.evaluate("location.href")))
             finally:
+                if session2 is not None:
+                    session2.terminate()
                 session.terminate()
 
 

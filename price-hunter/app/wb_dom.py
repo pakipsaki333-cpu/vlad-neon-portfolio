@@ -300,10 +300,11 @@ class ChromeBrowserSession:
     """A small synchronous Chrome DevTools Protocol client.
 
     One session owns one page websocket.  WB and Ozon intentionally use
-    separate session objects over the same dedicated profile/port, so
-    all sessions for one physical browser endpoint share a process-wide
-    RLock: a scan, diagnostics and the other marketplace can never drive
-    that window at the same time.  If Price Hunter launched the browser
+    separate session objects **and separate tabs** over the same dedicated
+    profile/port, so a WB navigation can never yank the user's Ozon tab
+    away (and vice versa).  All sessions for one physical browser endpoint
+    still share a process-wide RLock: a scan, diagnostics and the other
+    marketplace can never drive that window at the same time.  If Price Hunter launched the browser
     process, :meth:`terminate` can close it; merely calling :meth:`close`
     leaves the visible browser open so a user can pass a marketplace
     browser check and immediately retry diagnostics/scanning.
@@ -328,6 +329,8 @@ class ChromeBrowserSession:
                  home_url: str = WB_HOME):
         self.home_url = home_url or WB_HOME
         self.home_host = urlparse(self.home_url).netloc.lower()
+        self.home_domain = self.home_host[4:] \
+            if self.home_host.startswith("www.") else self.home_host
         self.custom_executable = executable or ""
         self.profile_dir = Path(profile_dir) if profile_dir else _DEFAULT_PROFILE
         try:
@@ -340,6 +343,7 @@ class ChromeBrowserSession:
         self._lock = self._shared_lock(self.profile_dir, self.port)
         self._proc: subprocess.Popen[Any] | None = None
         self._ws: Any = None
+        self._target_id: str | None = None
         self._next_id = 0
         self.executable: str | None = None
         self.launched_by_app = False
@@ -418,6 +422,57 @@ class ChromeBrowserSession:
             f"Браузер запустился, но CDP на порту {self.port} не отвечает. "
             "Закрой окно браузера Price Hunter и повтори проверку.")
 
+    def _is_home_url(self, url: Any) -> bool:
+        host = (urlparse(str(url or "")).hostname or "").lower()
+        if not host or not self.home_domain:
+            return False
+        return host == self.home_domain or host == self.home_host or \
+            host.endswith("." + self.home_domain)
+
+    @staticmethod
+    def _is_blank_url(url: Any) -> bool:
+        return str(url or "").strip().lower() in (
+            "", "about:blank", "chrome://newtab/", "chrome://new-tab-page/",
+            "edge://newtab/", "edge://new-tab-page/")
+
+    def _select_target(self, targets: Any) -> dict[str, Any] | None:
+        """Pick *this marketplace's* tab — never the other one's.
+
+        Preference: the tab this session already owned, then any tab on
+        this marketplace's domain, then a blank tab we may adopt.  If none
+        qualifies the caller creates a new tab, so WB work can never
+        navigate the Ozon tab away (the old single-tab behaviour).
+        """
+        pages = [t for t in targets if isinstance(t, dict)
+                 and t.get("type") == "page" and t.get("webSocketDebuggerUrl")] \
+            if isinstance(targets, list) else []
+        if self._target_id:
+            owned = next((t for t in pages
+                          if str(t.get("id") or "") == self._target_id), None)
+            if owned is not None:
+                return owned
+        home = next((t for t in pages if self._is_home_url(t.get("url"))), None)
+        if home is not None:
+            return home
+        return next((t for t in pages if self._is_blank_url(t.get("url"))), None)
+
+    def _create_target(self) -> dict[str, Any]:
+        errors: list[str] = []
+        for method in ("PUT", "GET"):
+            try:
+                target = self._http_json(
+                    "/json/new?" + urlencode({"url": self.home_url}),
+                    method=method)
+            except Exception as e:  # modern Chrome: PUT only, older: GET
+                errors.append(f"{method}: {e!r}")
+                continue
+            if isinstance(target, dict) and target.get("webSocketDebuggerUrl"):
+                return target
+            errors.append(f"{method}: нет webSocketDebuggerUrl")
+        raise BrowserSessionError(
+            "Не удалось открыть отдельную вкладку маркетплейса в браузере: "
+            + "; ".join(errors))
+
     def _connect(self) -> None:
         if self._ws is not None:
             return
@@ -426,22 +481,13 @@ class ChromeBrowserSession:
             targets = self._http_json("/json/list")
         except Exception as e:
             raise BrowserSessionError(f"CDP браузера не отвечает: {e!r}") from e
-        pages = [t for t in targets if isinstance(t, dict)
-                 and t.get("type") == "page" and t.get("webSocketDebuggerUrl")]
-        target = next(
-            (t for t in pages
-             if self.home_host and self.home_host in str(t.get("url") or "")),
-            pages[0] if pages else None)
+        target = self._select_target(targets)
         if target is None:
-            try:
-                target = self._http_json(
-                    "/json/new?" + urlencode({"url": self.home_url}), method="PUT")
-            except Exception as e:
-                raise BrowserSessionError(
-                    f"Не удалось открыть вкладку маркетплейса в браузере: {e!r}") from e
+            target = self._create_target()
         ws_url = target.get("webSocketDebuggerUrl") if isinstance(target, dict) else None
         if not ws_url:
             raise BrowserSessionError("Браузер не дал адрес вкладки для CDP.")
+        self._target_id = str(target.get("id") or "") or None
         try:
             import websocket  # websocket-client, imported lazily
             self._ws = websocket.create_connection(
@@ -452,10 +498,20 @@ class ChromeBrowserSession:
         self._send("Runtime.enable")
 
     def ensure_ready(self, home_url: str | None = None) -> dict[str, Any]:
-        if home_url:
-            self.home_url = home_url
-            self.home_host = urlparse(home_url).netloc.lower()
         with self._lock:
+            if home_url:
+                new_host = urlparse(home_url).netloc.lower()
+                new_domain = new_host[4:] if new_host.startswith("www.") \
+                    else new_host
+                if new_domain != self.home_domain:
+                    # The session was retargeted at the other marketplace:
+                    # drop the old tab binding so _connect() adopts/creates
+                    # that marketplace's own tab instead of hijacking this one.
+                    self.close()
+                    self._target_id = None
+                self.home_url = home_url
+                self.home_host = new_host
+                self.home_domain = new_domain
             self._connect()
             url = ""
             try:
@@ -464,17 +520,29 @@ class ChromeBrowserSession:
                 self.close()
                 self._connect()
                 url = str(self.evaluate("location.href") or "")
-            current_host = urlparse(url).netloc.lower()
-            same_site = bool(current_host and self.home_host and (
-                current_host == self.home_host or
-                current_host.endswith("." + self.home_host.removeprefix("www.")) or
-                self.home_host.endswith("." + current_host.removeprefix("www."))))
-            if not same_site:
+            if not self._is_home_url(url):
                 self.navigate(self.home_url)
                 url = str(self.evaluate("location.href") or "")
             return {"ok": True, "url": url, "home_url": self.home_url,
+                    "target_id": self._target_id,
                     "executable": self.executable,
                     "profile_dir": str(self.profile_dir), "port": self.port}
+
+    def bring_to_front(self, home_url: str | None = None) -> dict[str, Any]:
+        """Ensure this marketplace's tab exists and make it the active one.
+
+        Only for explicit user actions («Открыть браузер WB/Ozon»): routine
+        fetches/DOM reads must not steal the active tab while scanning.
+        """
+        with self._lock:
+            info = self.ensure_ready(home_url)
+            try:
+                self._send("Page.bringToFront")
+                info = {**info, "url": str(
+                    self.evaluate("location.href") or info.get("url") or "")}
+            except BrowserSessionError:
+                pass  # activation is cosmetic; the tab itself is ready
+            return info
 
     def close(self) -> None:
         """Close only the CDP connection; keep the visible browser alive."""
@@ -500,6 +568,7 @@ class ChromeBrowserSession:
                     except Exception:
                         pass
             self._proc = None
+            self._target_id = None  # browser gone: forget the owned tab
 
     # -- CDP primitives ------------------------------------------------- #
     def _send(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:

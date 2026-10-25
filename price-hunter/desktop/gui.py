@@ -363,7 +363,7 @@ class PriceHunterApp:
         ttk.Checkbutton(sc, text="Скрытый браузер (headless; проверки WB/Ozon вручную не пройти)",
                         variable=self._bvar("wb_browser_headless", False)).grid(
                             row=16, column=1, sticky="w", pady=3, columnspan=2)
-        tk.Label(sc, text="WB и Ozon работают по очереди в одном отдельном профиле Price Hunter. Вход в аккаунты не нужен; куки никуда не отправляются; окно не закрывай во время охоты",
+        tk.Label(sc, text="WB и Ozon работают в одном отдельном профиле Price Hunter, но каждый в своей вкладке: скан одной площадки не уводит вкладку другой. Вход в аккаунты не нужен; куки никуда не отправляются; окно и обе вкладки не закрывай во время охоты",
                  bg=PANEL, fg=MUT, wraplength=980, justify="left").grid(row=17, column=0, columnspan=3, sticky="w", pady=3)
         self._field(sc, 18, "Повторная проверка LIVE, сек", self._svar("live_probe_interval_sec"))
 
@@ -524,11 +524,11 @@ class PriceHunterApp:
         def work():
             try:
                 info = self.ctrl.open_marketplace_browser(marketplace)
-                text = (f"Браузер {label} открыт. Дождись загрузки {site} и, если "
-                        "появится проверка, пройди её именно в этом окне. Для Ozon "
+                text = (f"Вкладка {label} открыта и активна. Дождись загрузки {site} и, если "
+                        "появится проверка, пройди её именно в этой вкладке. Для Ozon "
                         "при необходимости выбери город доставки. Вход в аккаунт "
-                        f"не нужен. Затем нажми «Проверить {site}». Общее окно "
-                        f"Price Hunter не закрывай во время охоты. "
+                        f"не нужен. Затем нажми «Проверить {site}». У каждой площадки "
+                        f"в этом окне своя отдельная вкладка — не закрывай их во время охоты. "
                         f"URL: {info.get('url') or ''}")
                 self.root.after(0, lambda: (
                     diag_var.set(text) if diag_var is not None else None,
