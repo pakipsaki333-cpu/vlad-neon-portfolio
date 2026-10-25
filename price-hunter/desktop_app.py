@@ -4,6 +4,7 @@ Usage:
   python desktop_app.py              # GUI (starts hunting immediately)
   python desktop_app.py --minimized  # start in the tray (used by autostart)
   python desktop_app.py --self-test  # headless: one demo scan, prints JSON
+  python desktop_app.py --diagnose-wb  # WB connectivity verdict (JSON + file)
   python desktop_app.py --gui-smoke  # CI: build the window, close after 1s
   PriceHunter.exe                    # packaged build, same flags work
 
@@ -60,13 +61,35 @@ def _setup_logging() -> None:
 def self_test() -> int:
     """Headless engine check (no display needed): force one demo scan."""
     _setup_logging()
+    os.environ["HUNTER_MODE"] = "demo"   # Settings reads this on init
     from desktop.controller import DesktopController
     ctrl = DesktopController()
-    ctrl.scanner.effective_mode = "demo"   # deterministic, offline
-    result = ctrl.scanner.scan_once()
-    result["alerts_in_db"] = len(ctrl.alerts(50))
+    try:
+        result = ctrl.scanner.scan_once()
+        result["alerts_in_db"] = len(ctrl.alerts(50))
+    finally:
+        ctrl.shutdown()
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result.get("scanned", 0) > 0 else 1
+
+
+def diagnose_wb(query: str | None = None) -> int:
+    """Print + persist a WB connectivity verdict (support artifact)."""
+    _setup_logging()
+    from desktop.controller import DesktopController
+    ctrl = DesktopController()
+    try:
+        result = ctrl.diagnose_wb(query)
+    finally:
+        ctrl.shutdown()
+    text = json.dumps(result, ensure_ascii=False, indent=2)
+    try:
+        (DATA_DIR / "wb-diagnostics.json").write_text(text, encoding="utf-8")
+    except Exception:
+        pass
+    if sys.stdout:
+        print(text)
+    return 0 if result.get("ok") else 2
 
 
 def main() -> int:
@@ -77,10 +100,16 @@ def main() -> int:
                     help="run one headless demo scan and exit")
     ap.add_argument("--gui-smoke", action="store_true",
                     help="open the window and close it after ~1s (CI)")
+    ap.add_argument("--diagnose-wb", nargs="?", const="__default__",
+                    default=None, metavar="QUERY",
+                    help="check WB connectivity, print JSON verdict and exit")
     args = ap.parse_args()
 
     if args.self_test:
         return self_test()
+    if args.diagnose_wb is not None:
+        return diagnose_wb(None if args.diagnose_wb == "__default__"
+                           else args.diagnose_wb)
 
     _setup_logging()
     from desktop.controller import DesktopController

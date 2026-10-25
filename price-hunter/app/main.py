@@ -83,6 +83,12 @@ def scan_now():
     return {"ok": True, **scanner.status()}
 
 
+@app.post("/api/wb/diagnose")
+def wb_diagnose():
+    """Connectivity verdict: outcome/message/hint + per-endpoint attempts."""
+    return scanner.diagnose()
+
+
 @app.get("/api/settings")
 def get_settings():
     return settings.public()
@@ -95,6 +101,7 @@ async def post_settings(req: Request):
     if patch.get("telegram_token") in ("", None) and settings.get()["telegram_token"]:
         patch.pop("telegram_token", None)
     updated = settings.update(patch)
+    scanner.reset_mode()  # mode/dest/transport may have changed
     return settings.public()
 
 

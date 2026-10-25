@@ -5,12 +5,18 @@ Build (on Windows):  pyinstaller --clean PriceHunter.spec
 """
 block_cipher = None
 
+# curl_cffi ships a native libcurl binding the browser transport needs;
+# collect it explicitly so the packaged exe really can use it.
+from PyInstaller.utils.hooks import collect_all
+_curl_datas, _curl_binaries, _curl_hidden = collect_all("curl_cffi")
+
 a = Analysis(
     ["desktop_app.py"],
     pathex=["."],
-    binaries=[],
-    datas=[("assets", "assets")],
-    hiddenimports=["pystray._win32", "PIL.Image", "PIL.ImageDraw"],
+    binaries=_curl_binaries,
+    datas=[("assets", "assets")] + _curl_datas,
+    hiddenimports=["pystray._win32", "PIL.Image", "PIL.ImageDraw",
+                   "curl_cffi", "curl_cffi.requests"] + _curl_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -30,7 +36,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,              # UPX-packed exes draw AV false positives
     console=False,          # windowed: no black console behind the app
     disable_windowed_traceback=False,
     argv_emulation=False,

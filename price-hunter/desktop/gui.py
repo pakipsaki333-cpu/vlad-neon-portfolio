@@ -143,6 +143,10 @@ class PriceHunterApp:
         tk.Label(f, textvariable=self.var_tg_warn, bg=BG, fg=AMBER,
                  font=("Segoe UI", 11, "bold"), wraplength=1050,
                  justify="left", anchor="w").pack(fill="x", pady=2)
+        self.var_wb_warn = tk.StringVar(value="")
+        tk.Label(f, textvariable=self.var_wb_warn, bg=BG, fg=PINK,
+                 font=("Segoe UI", 11, "bold"), wraplength=1050,
+                 justify="left", anchor="w").pack(fill="x", pady=2)
 
         actions = ttk.Frame(f)
         actions.pack(fill="x", pady=8)
@@ -152,6 +156,9 @@ class PriceHunterApp:
                    command=lambda: self.nb.select(1)).pack(side="left", padx=4)
         ttk.Button(actions, text="Свернуть в трей",
                    command=self._hide_to_tray).pack(side="left", padx=4)
+        ttk.Button(actions, text="Проверить соединение WB",
+                   style="Accent.TButton",
+                   command=lambda: self._diagnose_wb()).pack(side="left", padx=4)
 
         tk.Label(f, text="Последние находки (двойной клик — открыть товар):",
                  bg=BG, fg=MUT, font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(10, 4))
@@ -258,8 +265,8 @@ class PriceHunterApp:
         tk.Label(sc, text="Режим", bg=PANEL, fg=MUT, font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky="w", pady=3, padx=(0, 8))
         ttk.Combobox(sc, textvariable=self._svar("mode", "auto"), state="readonly",
                      values=["auto", "live", "demo"], width=16).grid(row=0, column=1, sticky="w", pady=3)
-        tk.Label(sc, text="auto = живой WB; demo = симуляция для проверки интерфейса",
-                 bg=PANEL, fg=MUT).grid(row=0, column=2, sticky="w", padx=8)
+        tk.Label(sc, text="live = только настоящий WB; auto = WB, при недоступности временный demo с повторной проверкой; demo = симуляция, товары не ищутся",
+                 bg=PANEL, fg=MUT, wraplength=620, justify="left").grid(row=0, column=2, sticky="w", padx=8)
         self._field(sc, 1, "Интервал, сек (минимум 60)", self._svar("interval_sec"))
         self._field(sc, 2, "Страниц на запрос", self._svar("pages_per_query"))
         tk.Label(sc, text="Сортировки выдачи", bg=PANEL, fg=MUT,
@@ -273,6 +280,20 @@ class PriceHunterApp:
         self._field(sc, 4, "Регион WB (dest)", self._svar("dest"))
         tk.Label(sc, text="−1257786 = Москва", bg=PANEL, fg=MUT).grid(row=4, column=2, sticky="w", padx=8)
         self._field(sc, 5, "СПП/WB Кошелёк, %", self._svar("spp"))
+        tk.Label(sc, text="Транспорт WB", bg=PANEL, fg=MUT,
+                 font=("Segoe UI", 9, "bold")).grid(row=6, column=0, sticky="w", pady=3, padx=(0, 8))
+        ttk.Combobox(sc, textvariable=self._svar("wb_transport", "auto"),
+                     state="readonly", values=["auto", "browser", "httpx"],
+                     width=16).grid(row=6, column=1, sticky="w", pady=3)
+        tk.Label(sc, text="auto: обычный HTTP, при 403/498 — браузерный (curl_cffi Chrome). Если WB «не ищет», оставь auto",
+                 bg=PANEL, fg=MUT, wraplength=620, justify="left").grid(row=6, column=2, sticky="w", padx=8)
+        self._field(sc, 7, "Пауза между запросами WB, сек", self._svar("wb_request_delay_sec"))
+        self._field(sc, 8, "Повторная проверка LIVE, сек", self._svar("live_probe_interval_sec"))
+        self.var_wb_diag = tk.StringVar(value="")
+        ttk.Button(sc, text="Сохранить и проверить WB", style="Accent.TButton",
+                   command=lambda: self._diagnose_wb(save_first=True)).grid(row=9, column=1, sticky="w", pady=6)
+        tk.Label(sc, textvariable=self.var_wb_diag, bg=PANEL, fg=TEXT,
+                 wraplength=980, justify="left").grid(row=10, column=0, columnspan=3, sticky="w", pady=4)
 
         # Detector
         dt = self._section(f, "Детектор аномалий")
@@ -342,7 +363,8 @@ class PriceHunterApp:
         for key in ("mode", "interval_sec", "pages_per_query", "min_discount_pct",
                     "min_drop_vs_history_pct", "min_original_price_rub",
                     "min_saving_rub", "min_score", "alert_cooldown_hours",
-                    "dest", "spp", "telegram_chat_id"):
+                    "dest", "spp", "wb_transport", "wb_request_delay_sec",
+                    "live_probe_interval_sec", "telegram_chat_id"):
             self.v[key].set(str(cfg.get(key, "")))
         self.v["telegram_token"].set("")   # never echo the secret back
         self.var_token_hint.set(
@@ -367,26 +389,26 @@ class PriceHunterApp:
         raw["queries"] = self.txt_queries.get("1.0", "end")
         return raw
 
-    def _save_settings(self):
+    def _save_settings(self) -> bool:
         try:
             pub = self.ctrl.save_settings(self._collect_form())
         except ValueError as e:
             messagebox.showerror("Настройки не сохранены", str(e))
-            return
-        # Re-resolve live/demo on the next scan if the mode changed.
-        self.ctrl.scanner.effective_mode = "—"
+            return False
+        # Controller.save_settings already reset the live/demo verdict.
         ok_auto = autostart.set_enabled(bool(self.var_autostart.get())) \
             if autostart.is_supported() else None
         self.v["telegram_token"].set("")
         self.var_token_hint.set(
             f"сохранён: {pub['telegram_token_masked']}" if pub.get("telegram_token_masked")
             else "ещё не задан")
-        msg = "✅ Сохранено"
+        msg = "Сохранено"
         if ok_auto is False:
             msg += " (автозапуск не применился)"
         self.var_saved.set(msg)
         self.root.after(4000, lambda: self.var_saved.set(""))
         self._poll(once=True)
+        return True
 
     def _test_telegram(self):
         self.var_tg_test.set("отправляю…")
@@ -397,6 +419,51 @@ class PriceHunterApp:
             self.root.after(0, lambda: self.var_tg_test.set(msg))
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _diagnose_wb(self, save_first: bool = False):
+        if save_first and not self._save_settings():
+            return
+        self.var_wb_diag.set("Проверяю WB: пробую актуальные endpoint'ы и транспорты…")
+        self.var_wb_warn.set("Проверяю соединение с WB…")
+
+        def work():
+            res = self.ctrl.diagnose_wb()
+            self.root.after(0, lambda: self._apply_diagnosis(res))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_diagnosis(self, res: dict):
+        lines = [str(res.get("message") or "")]
+        if res.get("sample"):
+            lines.append(f"Пример товара: {res['sample']}")
+        if res.get("ok") and res.get("card_ok") is False:
+            lines.append("Поиск работает, но проверка карточки товара не прошла.")
+        if res.get("requested_mode") == "demo":
+            lines.append("ВАЖНО: сейчас выбран режим DEMO — настоящие товары "
+                         "не ищутся. Переключи режим на live или auto и сохрани.")
+        elif res.get("effective_mode") == "live" and res.get("ok"):
+            lines.append("Режим LIVE активен. Если находок пока нет — это "
+                         "нормально: товары уже пишутся в базу, алерт будет "
+                         "только на аномальное падение цены.")
+        if res.get("hint"):
+            lines.append(str(res["hint"]))
+        attempts = res.get("attempts") or []
+        if attempts:
+            tail = []
+            for a in attempts[-4:]:
+                endpoint = str(a.get("endpoint") or "")
+                host = endpoint.split("/")[2] if "://" in endpoint else endpoint
+                tail.append(f"{host}/{a.get('transport', '?')}: "
+                            f"{a.get('outcome', '?')}"
+                            + (f" HTTP {a['status']}" if a.get("status") else ""))
+            lines.append("Попытки: " + "; ".join(tail))
+        text = "\n".join(line for line in lines if line)
+        self.var_wb_diag.set(text)
+        if res.get("ok"):
+            messagebox.showinfo("Проверка WB", text)
+        else:
+            messagebox.showwarning("Проверка WB", text)
+        self._poll(once=True)
 
     def _selected_alert(self) -> dict | None:
         sel = self.tree.selection()
@@ -518,9 +585,17 @@ class PriceHunterApp:
 
         st = self.ctrl.status()
         mode = st.get("effective_mode") or "…"
+        requested = st.get("requested_mode") or st.get("mode")
+        if mode == "live":
+            badge = "● LIVE WB"
+        elif requested == "demo":
+            badge = "● DEMO (вручную)"
+        elif mode == "demo":
+            badge = "● DEMO • WB недоступен"
+        else:
+            badge = "● ПРОВЕРКА WB…"
         self.badge_mode.configure(
-            text=("● LIVE WB" if mode == "live" else f"● {str(mode).upper()}"),
-            fg=GREEN if mode == "live" else AMBER)
+            text=badge, fg=GREEN if mode == "live" else AMBER)
         if st["scanning"]:
             run_txt = "сканирую…"
         elif st["running"] and st.get("next_scan_ts"):
@@ -543,14 +618,37 @@ class PriceHunterApp:
         pub = st["settings"]
         tg_ok = pub.get("telegram_configured") and pub.get("telegram_enabled")
         self.var_status.set(
-            f"Режим: {mode} · запросов: {len(pub.get('queries') or [])} · "
+            f"Режим: запрошен {requested}, фактически {mode} · "
+            f"запросов: {len(pub.get('queries') or [])} · "
             f"интервал: {pub.get('interval_sec')} с · "
+            f"транспорт WB: {st.get('wb_transport', 'auto')} · "
             f"последнее сканирование: {_fmt_ts(st.get('last_scan_ts'))} · "
             f"Telegram: {'настроен' if tg_ok else 'НЕ настроен'}"
             + (f" · ошибка: {st['last_error'][:90]}" if st.get("last_error") else ""))
         self.var_tg_warn.set(
             "" if tg_ok else "⚠ Telegram не настроен: без него не узнаешь о находке вовремя. "
                              "Вкладка «Настройки» → токен @BotFather + chat_id.")
+        reason = str(st.get("mode_reason") or "")
+        if requested == "demo":
+            wb_warn = ("⚠ Сейчас включён DEMO вручную: настоящие товары WB НЕ ищутся, "
+                       "находки сгенерированы. Для охоты: Настройки → Режим → live "
+                       "(или auto) → Сохранить и проверить WB.")
+        elif mode == "demo":
+            nxt = st.get("next_live_probe_ts")
+            retry = (f" Повторная проверка LIVE примерно через "
+                     f"{max(0, int(nxt) - int(time.time()))} с."
+                     if nxt else "")
+            wb_warn = ("⚠ WB сейчас недоступен, приложение временно в DEMO и "
+                       f"настоящие товары не ищет. Причина: {reason}{retry} "
+                       "Нажми «Проверить соединение WB».")
+        elif mode == "live" and st.get("last_error"):
+            wb_warn = (f"⚠ LIVE включён, но WB отвечает с ошибками: "
+                       f"{st['last_error'][:180]} Нажми «Проверить соединение WB».")
+        elif mode == "live":
+            wb_warn = ""
+        else:
+            wb_warn = "Проверяю доступность WB…"
+        self.var_wb_warn.set(wb_warn)
 
         self._refresh_alerts()
         self._refresh_runs()

@@ -46,10 +46,11 @@ canvas.hist{width:100%;height:120px;background:#0b0b1c;border-radius:10px;margin
  <span id="runState" class="mut"></span>
  <span style="flex:1"></span>
  <button class="btn" id="btnNow">⚡ Сканировать сейчас</button>
+ <button class="btn2" id="btnDiag">Проверить WB</button>
  <button class="btn2" id="btnToggle">⏸ Пауза</button>
  <button class="btn2" id="btnSettings">⚙️ Настройки</button>
 </header>
-<div id="demoBanner" class="banner" style="display:none">⚠ <b>DEMO-режим.</b> Из этой песочницы WB по сети недоступен, поэтому падения ниже — честная симуляция механизма (товары вымышлены, помечены DEMO). У тебя на ПК тот же код в режиме <b>auto/live</b> ходит в настоящий API Wildberries. См. README.</div>
+<div id="demoBanner" class="banner" style="display:none"><span id="demoBannerText">⚠ DEMO-режим: настоящие товары не ищутся.</span></div>
 <main>
  <div class="kpis">
   <div class="kpi"><small>Товаров в базе</small><b id="kProducts">—</b></div>
@@ -80,6 +81,8 @@ canvas.hist{width:100%;height:120px;background:#0b0b1c;border-radius:10px;margin
   <div><label>Мин. падение vs истории, %</label><input id="sMinDrop" type="number"></div>
   <div><label>Мин. исходная цена, ₽</label><input id="sMinPrice" type="number"></div>
   <div><label>Мин. выгода, ₽</label><input id="sMinSaving" type="number"></div>
+  <div><label>Транспорт WB (auto — при 403 браузерный)</label><select id="sTransport"><option value="auto">auto</option><option value="browser">browser (curl_cffi Chrome)</option><option value="httpx">httpx (обычный)</option></select></div>
+  <div><label>Пауза между запросами WB, сек</label><input id="sDelay" type="number" step="0.1"></div>
  </div>
  <h3>✈️ Telegram</h3>
  <p class="mut">1) @BotFather → /newbot → токен. 2) Напиши боту /start. 3) Chat id: @userinfobot. Инструкция целиком — в README.</p>
@@ -104,8 +107,10 @@ function photo(a){return a.photo?`<img class="ph" src="${a.photo}" loading="lazy
 async function refresh(){
  try{
   const st=await j('/api/status'); running=st.running;
-  const mode=st.effective_mode||st.mode; $('modeBadge').textContent=mode.toUpperCase()+(mode==='demo'?' · симуляция':' · Wildberries');
+  const mode=st.effective_mode||st.mode, req=st.requested_mode||st.mode;
+  $('modeBadge').textContent=mode==='live'?'LIVE · Wildberries':(req==='demo'?'DEMO · включён вручную':(mode==='demo'?'DEMO · WB недоступен':String(mode).toUpperCase()));
   $('modeBadge').className='badge '+(mode==='live'?'live':'demo'); $('demoBanner').style.display=mode==='demo'?'block':'none';
+  if(mode==='demo')$('demoBannerText').textContent=req==='demo'?'⚠ DEMO включён вручную: настоящие товары WB НЕ ищутся, находки сгенерированы. Для охоты: Настройки → режим live (или auto) → Сохранить → «Проверить WB».':('⚠ WB недоступен — временный DEMO, настоящие товары не ищутся. Причина: '+(st.mode_reason||st.last_error||'неизвестна')+' Нажми «Проверить WB».');
   $('runState').innerHTML=`<span class="dot ${running?'':'off'}"></span>${st.scanning?'сканирую…':running?(st.next_scan_ts?('след. проход через '+Math.max(0,st.next_scan_ts-Math.floor(Date.now()/1000))+' с'):'работает'):'на паузе'}`;
   $('btnToggle').textContent=running?'⏸ Пауза':'▶️ Запуск';
   const s=st.stats; $('kProducts').textContent=s.products_seen;$('kAlerts').textContent=s.alerts_today;$('kBest').textContent='−'+Math.round(s.best_discount_today)+'%';$('kSaving').textContent=fmt(s.potential_saving_today);$('kScans').textContent=s.scans_total;$('kSnaps').textContent=s.snapshots;
@@ -137,10 +142,11 @@ async function showHist(nm,id){const el=$('hist-'+id);const {history}=await j('/
  x.strokeStyle='#00f0ff';x.lineWidth=2;x.beginPath();history.forEach((h,i)=>{const px=10+i*(620/(history.length-1)),py=105-((h.sale_price-mn)/rg)*90;i?x.lineTo(px,py):x.moveTo(px,py)});x.stroke();
  x.fillStyle='#8b8fb3';x.font='12px sans-serif';x.fillText('min '+fmt(mn)+' · max '+fmt(mx),10,14)}
 $('btnNow').onclick=async()=>{await j('/api/scan/now',{method:'POST'});setTimeout(refresh,1200)};
+$('btnDiag').onclick=async()=>{const b=$('btnDiag');b.disabled=true;b.textContent='Проверяю WB…';try{const r=await j('/api/wb/diagnose',{method:'POST'});alert((r.message||'')+(r.sample?'\nПример: '+r.sample:'')+(r.requested_mode==='demo'?'\nВАЖНО: сейчас выбран DEMO — переключи режим на live/auto и сохрани.':'')+(r.hint?'\n'+r.hint:''))}catch(e){alert('Диагностика не удалась: '+e.message)}finally{b.disabled=false;b.textContent='Проверить WB';refresh()}};
 $('btnToggle').onclick=async()=>{await j(running?'/api/scan/stop':'/api/scan/start',{method:'POST'});refresh()};
-$('btnSettings').onclick=async()=>{const s=await j('/api/settings');$('sMode').value=s.mode;$('sQueries').value=(s.queries||[]).join('\n');$('sInterval').value=s.interval_sec;$('sPages').value=s.pages_per_query;$('sMinDisc').value=s.min_discount_pct;$('sMinDrop').value=s.min_drop_vs_history_pct;$('sMinPrice').value=s.min_original_price_rub;$('sMinSaving').value=s.min_saving_rub;$('sTgChat').value=s.telegram_chat_id||'';$('tokHint').textContent=s.telegram_configured?('(уже задан: '+(s.telegram_token_masked||'')+')'):'';$('settingsModal').classList.add('open')};
+$('btnSettings').onclick=async()=>{const s=await j('/api/settings');$('sMode').value=s.mode;$('sQueries').value=(s.queries||[]).join('\n');$('sInterval').value=s.interval_sec;$('sPages').value=s.pages_per_query;$('sMinDisc').value=s.min_discount_pct;$('sMinDrop').value=s.min_drop_vs_history_pct;$('sMinPrice').value=s.min_original_price_rub;$('sMinSaving').value=s.min_saving_rub;$('sTransport').value=s.wb_transport||'auto';$('sDelay').value=s.wb_request_delay_sec||1.2;$('sTgChat').value=s.telegram_chat_id||'';$('tokHint').textContent=s.telegram_configured?('(уже задан: '+(s.telegram_token_masked||'')+')'):'';$('settingsModal').classList.add('open')};
 $('btnClose').onclick=()=>$('settingsModal').classList.remove('open');
-$('btnSave').onclick=async()=>{const body={mode:$('sMode').value,queries:$('sQueries').value.split('\n').map(x=>x.trim()).filter(Boolean),interval_sec:+$('sInterval').value,pages_per_query:+$('sPages').value,min_discount_pct:+$('sMinDisc').value,min_drop_vs_history_pct:+$('sMinDrop').value,min_original_price_rub:+$('sMinPrice').value,min_saving_rub:+$('sMinSaving').value,telegram_chat_id:$('sTgChat').value.trim(),telegram_token:$('sTgToken').value.trim()};
+$('btnSave').onclick=async()=>{const body={mode:$('sMode').value,queries:$('sQueries').value.split('\n').map(x=>x.trim()).filter(Boolean),interval_sec:+$('sInterval').value,pages_per_query:+$('sPages').value,min_discount_pct:+$('sMinDisc').value,min_drop_vs_history_pct:+$('sMinDrop').value,min_original_price_rub:+$('sMinPrice').value,min_saving_rub:+$('sMinSaving').value,wb_transport:$('sTransport').value,wb_request_delay_sec:+$('sDelay').value,telegram_chat_id:$('sTgChat').value.trim(),telegram_token:$('sTgToken').value.trim()};
  try{await j('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});$('setMsg').textContent='✅ Сохранено';refresh()}catch(e){$('setMsg').textContent='❌ '+e.message}};
 $('btnTgTest').onclick=async()=>{try{await j('/api/telegram/test',{method:'POST'});$('setMsg').textContent='✅ Проверь Telegram'}catch(e){$('setMsg').textContent='❌ '+e.message}};
 refresh();setInterval(refresh,8000);

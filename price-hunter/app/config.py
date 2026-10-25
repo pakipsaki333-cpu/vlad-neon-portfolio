@@ -83,6 +83,19 @@ class Settings:
         # Clamp dangerous values (protect user's IP from WB throttling).
         self._data["interval_sec"] = max(60, int(self._data["interval_sec"]))
         self._data["pages_per_query"] = max(1, min(10, int(self._data["pages_per_query"])))
+        if str(self._data.get("wb_transport", "auto")).lower() not in (
+                "auto", "httpx", "browser", "curl_cffi"):
+            self._data["wb_transport"] = "auto"
+        try:
+            self._data["wb_request_delay_sec"] = min(
+                10.0, max(0.5, float(self._data.get("wb_request_delay_sec", 1.2))))
+        except Exception:
+            self._data["wb_request_delay_sec"] = 1.2
+        try:
+            self._data["live_probe_interval_sec"] = min(
+                3600, max(60, int(self._data.get("live_probe_interval_sec", 300))))
+        except Exception:
+            self._data["live_probe_interval_sec"] = 300
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         SETTINGS_FILE.write_text(
             json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")

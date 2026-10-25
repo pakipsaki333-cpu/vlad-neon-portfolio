@@ -12,7 +12,7 @@ from . import demo, detector
 from .config import Settings
 from .db import DB
 from .telegram import TelegramNotifier
-from .wb_client import WBClient, WBUnavailable
+from .wb_client import WBClient, WBUnavailable, curl_cffi_available
 
 log = logging.getLogger("scanner")
 
@@ -27,10 +27,18 @@ class Scanner:
         self.running = False
         self.scanning = False
         self.effective_mode = "—"          # 'live' | 'demo' after first probe
+        self.mode_reason: str | None = None
+        self.last_probe: dict | None = None
+        self.last_probe_ts: int | None = None
+        self.next_live_probe_ts: int | None = None
+        self.live_failures = 0
         self.last_scan_ts: int | None = None
         self.next_scan_ts: int | None = None
         self.last_error: str | None = None
         self._listeners: list[Callable[[dict], None]] = []
+        self._client_cache: WBClient | None = None
+        self._client_sig: tuple | None = None
+        self._probe_lock = threading.Lock()
 
     # ------------------------------------------------------------------ #
     def on_alert(self, cb: Callable[[dict], None]) -> None:
@@ -43,29 +51,121 @@ class Scanner:
             except Exception:
                 pass
 
-    def _client(self) -> WBClient:
+    def _new_client(self) -> WBClient:
         cfg = self.settings.get()
-        return WBClient(dest=cfg["dest"], spp=cfg["spp"])
+        return WBClient(dest=cfg["dest"], spp=cfg["spp"],
+                        transport=cfg.get("wb_transport", "auto"))
 
-    def resolve_mode(self) -> str:
-        mode = self.settings.get().get("mode", "auto")
-        if mode in ("live", "demo"):
-            self.effective_mode = mode
-            return mode
-        # auto: probe WB once; sandbox / blocked network -> demo.
-        ok = self._client().ping()
-        self.effective_mode = "live" if ok else "demo"
-        log.info("auto mode -> %s (WB reachable: %s)", self.effective_mode, ok)
+    def _client(self) -> WBClient:
+        """Cached scan-thread client (keeps session cookies and the
+        endpoint that last worked between scans)."""
+        cfg = self.settings.get()
+        sig = (cfg.get("dest"), cfg.get("spp"), cfg.get("wb_transport", "auto"))
+        if self._client_cache is None or sig != self._client_sig:
+            if self._client_cache is not None:
+                self._client_cache.close()
+            self._client_cache = self._new_client()
+            self._client_sig = sig
+        return self._client_cache
+
+    def reset_mode(self) -> None:
+        """Forget the live/demo verdict so the next scan re-probes WB."""
+        self.effective_mode = "—"
+        self.mode_reason = None
+        self.next_live_probe_ts = None
+        self.last_probe_ts = None
+
+    def _probe_query(self) -> str:
+        queries = self.settings.get().get("queries") or []
+        return str(queries[0]) if queries else "наушники"
+
+    def _apply_probe(self, probe: dict) -> str:
+        cfg = self.settings.get()
+        requested = cfg.get("mode", "auto")
+        now = int(time.time())
+        self.last_probe = probe
+        self.last_probe_ts = now
+        if probe.get("ok"):
+            self.live_failures = 0
+            self.next_live_probe_ts = None
+            if requested == "demo":
+                self.effective_mode = "demo"
+                self.mode_reason = ("Выбран DEMO вручную: настоящие товары "
+                                    "не ищутся. Проверка показала, что WB "
+                                    "доступен — переключайся на auto/live.")
+            else:
+                self.effective_mode = "live"
+                self.mode_reason = probe.get("message") or "WB доступен"
+                self.last_error = None
+        else:
+            self.live_failures += 1
+            self.mode_reason = probe.get("message") or "WB недоступен"
+            self.last_error = self.mode_reason
+            if requested == "auto":
+                self.effective_mode = "demo"
+                self.next_live_probe_ts = now + int(
+                    cfg.get("live_probe_interval_sec", 300))
+            elif requested == "live":
+                self.effective_mode = "live"
+                self.next_live_probe_ts = None
+            else:
+                self.effective_mode = "demo"
         return self.effective_mode
+
+    def diagnose(self, query: str | None = None) -> dict:
+        """User-triggered WB check (own client; safe next to a running
+        scan). Updates the mode verdict and wakes the scan loop when
+        LIVE just became available."""
+        with self._probe_lock:
+            client = self._new_client()
+            try:
+                probe = client.probe(query or self._probe_query())
+            finally:
+                client.close()
+            before = self.effective_mode
+            effective = self._apply_probe(probe)
+        if probe.get("ok") and before != "live" and effective == "live" \
+                and self.running:
+            self._scan_now.set()
+        return {**probe,
+                "requested_mode": self.settings.get().get("mode", "auto"),
+                "effective_mode": self.effective_mode,
+                "mode_reason": self.mode_reason}
+
+    def resolve_mode(self, force: bool = False) -> str:
+        requested = self.settings.get().get("mode", "auto")
+        if requested == "demo":
+            self.effective_mode = "demo"
+            self.mode_reason = ("Выбран DEMO вручную: настоящие товары WB "
+                                "не ищутся, находки сгенерированы.")
+            return "demo"
+        if requested == "live":
+            self.effective_mode = "live"
+            if force or self.last_probe_ts is None:
+                # Record *why* live may fail, but stay live regardless.
+                self._apply_probe(self._client().probe(self._probe_query()))
+                self.effective_mode = "live"
+            return "live"
+        # auto
+        now = int(time.time())
+        if not force and self.effective_mode == "live":
+            return "live"
+        if not force and self.effective_mode == "demo" \
+                and self.next_live_probe_ts and now < self.next_live_probe_ts:
+            return "demo"  # fallback demo, re-probe is scheduled
+        probe = self._client().probe(self._probe_query())
+        effective = self._apply_probe(probe)
+        log.info("auto mode -> %s (%s)", effective, self.mode_reason)
+        return effective
 
     # ------------------------------------------------------------------ #
     def scan_once(self) -> dict:
         cfg = self.settings.get()
-        mode = self.effective_mode if self.effective_mode in ("live", "demo") \
-            else self.resolve_mode()
+        mode = self.resolve_mode()
         run_id = self.db.start_run(mode, len(cfg["queries"]))
         scanned = new_products = alerts_made = 0
         error = None
+        request_failures: list[str] = []
         self.scanning = True
         try:
             products: list[dict[str, Any]] = []
@@ -73,20 +173,56 @@ class Scanner:
             if mode == "live":
                 wb = self._client()
                 seen: set[int] = set()
+                delay = float(cfg.get("wb_request_delay_sec", 1.2))
+                consecutive_failures = 0
+                stop_fetching = False
                 for q in cfg["queries"]:
-                    if self._stop.is_set():
+                    if self._stop.is_set() or stop_fetching:
                         break
                     for sort in cfg.get("sorts", ["popular"]):
+                        if stop_fetching:
+                            break
+                        first_nm_page1: int | None = None
                         for page in range(1, cfg["pages_per_query"] + 1):
+                            if self._stop.is_set():
+                                break
                             try:
                                 batch = wb.search(q, page=page, sort=sort)
-                            except WBUnavailable as e:
-                                raise RuntimeError(str(e)) from e
+                            except Exception as e:
+                                # One dead request must not discard the
+                                # products other queries already delivered…
+                                msg = f"{q!r}/{sort}/стр.{page}: {str(e)[:240]}"
+                                request_failures.append(msg)
+                                log.warning("WB search failed (%s)", msg)
+                                consecutive_failures += 1
+                                # …but a dead WB must not turn one scan
+                                # into an endless retry loop either.
+                                if consecutive_failures >= 3 and not products:
+                                    stop_fetching = True
+                                elif consecutive_failures >= 5:
+                                    stop_fetching = True
+                                break
+                            consecutive_failures = 0
+                            if not batch:
+                                break
+                            if page == 1:
+                                first_nm_page1 = batch[0]["nm"]
+                            elif batch[0]["nm"] == first_nm_page1:
+                                break  # WB wrapped around to page 1
                             for p in batch:
                                 if p["nm"] not in seen:
                                     seen.add(p["nm"])
                                     products.append(p)
-                            time.sleep(0.7)  # be polite to WB
+                            time.sleep(delay)  # be polite to WB
+                if not products and request_failures:
+                    raise RuntimeError(
+                        "WB не отдал ни одного товара. "
+                        + " | ".join(request_failures[:3]))
+                if request_failures:
+                    error = (f"Частично: WB не ответил на "
+                             f"{len(request_failures)} запрос(ов): "
+                             + " | ".join(request_failures[:2]))
+                    self.last_error = error[:500]
             else:
                 products = demo.generate_scan(cfg["queries"])
 
@@ -131,31 +267,56 @@ class Scanner:
                         self.db.mark_telegram_sent(alert_id)
                         alert["telegram_sent"] = 1
                 self._emit(alert)
+            if mode == "live" and scanned > 0:
+                self.live_failures = 0
+                self.effective_mode = "live"
+                self.mode_reason = "WB доступен, идёт живой поиск"
+                if not request_failures:
+                    self.last_error = None
         except Exception as e:
             error = str(e)[:500]
             self.last_error = error
             log.warning("scan failed: %s", e)
-            if mode == "live" and self.settings.get().get("mode") == "auto":
-                # WB died mid-flight (throttle/block) - degrade to demo visibly
-                # rather than silently producing nothing.
-                self.effective_mode = "demo"
-                log.warning("falling back to DEMO mode")
+            if mode == "live":
+                self.live_failures += 1
+                if self.settings.get().get("mode") == "auto":
+                    # Temporary, *visible* fallback: re-probe LIVE on a
+                    # timer instead of sticking to demo forever.
+                    self.effective_mode = "demo"
+                    self.mode_reason = (
+                        "WB недоступен — временный DEMO, настоящие товары "
+                        f"не ищутся. Причина: {error[:220]}")
+                    self.next_live_probe_ts = int(time.time()) + int(
+                        cfg.get("live_probe_interval_sec", 300))
+                    log.warning("falling back to DEMO until %s",
+                                self.next_live_probe_ts)
+                else:
+                    self.mode_reason = f"LIVE: последний скан упал: {error[:220]}"
         finally:
             self.scanning = False
             self.last_scan_ts = int(time.time())
             self.db.finish_run(run_id, scanned, new_products, alerts_made, error)
         return {"scanned": scanned, "new": new_products,
-                "alerts": alerts_made, "error": error, "mode": mode}
+                "alerts": alerts_made, "error": error, "mode": mode,
+                "effective_mode": self.effective_mode,
+                "mode_reason": self.mode_reason,
+                "request_failures": len(request_failures)}
 
     # ------------------------------------------------------------------ #
     def _loop(self) -> None:
         self.resolve_mode()
         while not self._stop.is_set():
             self.scan_once()
-            interval = int(self.settings.get()["interval_sec"])
-            # Demo: scan more often so the preview feels alive.
+            cfg = self.settings.get()
+            interval = int(cfg["interval_sec"])
             if self.effective_mode == "demo":
-                interval = min(interval, 45)
+                if cfg.get("mode") == "demo":
+                    # Manually chosen demo: scan often so the UI feels alive.
+                    interval = min(interval, 45)
+                else:
+                    # Auto fallback: wake up in time for the LIVE re-probe.
+                    interval = min(
+                        interval, int(cfg.get("live_probe_interval_sec", 300)))
             self.next_scan_ts = int(time.time()) + interval
             self._scan_now.wait(timeout=interval)
             self._scan_now.clear()
@@ -185,11 +346,21 @@ class Scanner:
             threading.Thread(target=self.scan_once, daemon=True).start()
 
     def status(self) -> dict:
+        cfg = self.settings.get()
+        requested = cfg.get("mode", "auto")
         return {
             "running": self.running,
             "scanning": self.scanning,
-            "mode": self.settings.get().get("mode", "auto"),
+            "mode": requested,
+            "requested_mode": requested,
             "effective_mode": self.effective_mode,
+            "mode_reason": self.mode_reason,
+            "last_probe": self.last_probe,
+            "last_probe_ts": self.last_probe_ts,
+            "next_live_probe_ts": self.next_live_probe_ts,
+            "live_failures": self.live_failures,
+            "wb_transport": cfg.get("wb_transport", "auto"),
+            "browser_transport_available": curl_cffi_available(),
             "last_scan_ts": self.last_scan_ts,
             "next_scan_ts": self.next_scan_ts if self.running else None,
             "last_error": self.last_error,

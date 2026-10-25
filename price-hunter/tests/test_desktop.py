@@ -26,6 +26,8 @@ def form(**over):
         "min_original_price_rub": "1500", "min_saving_rub": "1000",
         "min_score": "35", "alert_cooldown_hours": "6",
         "dest": "-1257786", "spp": "30",
+        "wb_transport": "curl_cffi", "wb_request_delay_sec": "1.5",
+        "live_probe_interval_sec": "300",
         "verify_with_price_history": True, "telegram_enabled": True,
         "close_to_tray": True, "start_minimized": False,
         "telegram_token": "", "telegram_chat_id": "42",
@@ -52,6 +54,13 @@ class ParseFormTest(unittest.TestCase):
         out = parse_settings_form(form(interval_sec="5"), EXISTING)
         self.assertEqual(out["interval_sec"], 60)
 
+    def test_wb_transport_normalized(self):
+        out = parse_settings_form(form(), EXISTING)
+        self.assertEqual(out["wb_transport"], "browser")  # curl_cffi alias
+        self.assertEqual(out["wb_request_delay_sec"], 1.5)
+        with self.assertRaises(ValueError):
+            parse_settings_form(form(wb_transport="telepathy"), EXISTING)
+
     def test_empty_queries_rejected(self):
         with self.assertRaises(ValueError):
             parse_settings_form(form(queries="  \n "), EXISTING)
@@ -77,9 +86,10 @@ class AutostartTest(unittest.TestCase):
 class ControllerTest(unittest.TestCase):
     def test_demo_scan_end_to_end(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
-            ctrl = DesktopController(settings=Settings(),
+            settings = Settings()
+            settings._data["mode"] = "demo"  # in-memory only, no network probe
+            ctrl = DesktopController(settings=settings,
                                      db=DB(Path(d) / "t.db"))
-            ctrl.scanner.effective_mode = "demo"
             result = ctrl.scanner.scan_once()
             self.assertGreater(result["scanned"], 0)
             st = ctrl.status()

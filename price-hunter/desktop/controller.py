@@ -82,6 +82,20 @@ def parse_settings_form(raw: Mapping[str, Any], existing: dict) -> dict:
     out["dest"] = _as_int(raw, "dest", "Регион WB (dest)")
     out["spp"] = _as_int(raw, "spp", "СПП, %", 0, 100)
 
+    transport = str(raw.get("wb_transport", "auto")).strip().lower()
+    if transport == "curl_cffi":
+        transport = "browser"
+    if transport not in ("auto", "httpx", "browser"):
+        raise ValueError("Транспорт WB: выбери auto, browser или httpx")
+    out["wb_transport"] = transport
+    if raw.get("wb_request_delay_sec") not in (None, ""):
+        out["wb_request_delay_sec"] = _as_float(
+            raw, "wb_request_delay_sec", "Пауза между запросами, сек", 0.5, 10)
+    if raw.get("live_probe_interval_sec") not in (None, ""):
+        out["live_probe_interval_sec"] = _as_int(
+            raw, "live_probe_interval_sec", "Повторная проверка LIVE, сек",
+            60, 3600)
+
     out["verify_with_price_history"] = bool(raw.get("verify_with_price_history", True))
     out["telegram_enabled"] = bool(raw.get("telegram_enabled", True))
     out["close_to_tray"] = bool(raw.get("close_to_tray", True))
@@ -153,7 +167,14 @@ class DesktopController:
     def save_settings(self, raw: Mapping[str, Any]) -> dict:
         parsed = parse_settings_form(raw, self.settings.get())
         self.settings.update(parsed)
+        # Mode/dest/transport may have changed: re-probe WB on next scan.
+        self.scanner.reset_mode()
         return self.settings.public()
+
+    def diagnose_wb(self, query: str | None = None) -> dict:
+        """Run the WB connectivity check and return its full verdict
+        (ok/outcome/message/hint/attempts) for display in the UI."""
+        return self.scanner.diagnose(query)
 
     def telegram_test(self, token: str | None = None,
                       chat_id: str | None = None) -> tuple[bool, str]:
