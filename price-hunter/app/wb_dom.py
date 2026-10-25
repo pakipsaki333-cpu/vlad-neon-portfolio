@@ -1,4 +1,9 @@
-"""Real installed Chrome/Edge transport for Wildberries.
+"""Real installed Chrome/Edge transport for marketplace pages.
+
+This module started as the Wildberries fallback, but the CDP browser
+session itself is marketplace-neutral.  WB-specific rendered-tile parsing
+also lives here for compatibility; Ozon reuses :class:`ChromeBrowserSession`
+with its own home page and parsers.
 
 On some networks WB/WBAAS rejects every request made by the application
 process itself (both httpx and the curl_cffi Chrome impersonation get 403),
@@ -29,7 +34,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.parse import quote_plus, urlencode
+from urllib.parse import quote_plus, urlencode, urlparse
 
 import httpx
 
@@ -38,6 +43,7 @@ from .basket import photo_url, product_url
 log = logging.getLogger(__name__)
 
 WB_HOME = "https://www.wildberries.ru/"
+OZON_HOME = "https://www.ozon.ru/"
 _DEFAULT_PROFILE = Path(tempfile.gettempdir()) / "price-hunter-browser-profile"
 
 _SEARCH_EXTRACT_JS = r"""
@@ -293,15 +299,35 @@ def parse_dom_search_items(items: Iterable[dict[str, Any]]) -> list[dict[str, An
 class ChromeBrowserSession:
     """A small synchronous Chrome DevTools Protocol client.
 
-    One session owns one page websocket.  If Price Hunter launched the
-    browser process, :meth:`terminate` can close it; merely calling
-    :meth:`close` leaves the visible browser open so a user can pass WB's
+    One session owns one page websocket.  WB and Ozon intentionally use
+    separate session objects over the same dedicated profile/port, so
+    all sessions for one physical browser endpoint share a process-wide
+    RLock: a scan, diagnostics and the other marketplace can never drive
+    that window at the same time.  If Price Hunter launched the browser
+    process, :meth:`terminate` can close it; merely calling :meth:`close`
+    leaves the visible browser open so a user can pass a marketplace
     browser check and immediately retry diagnostics/scanning.
     """
 
+    _locks_guard = threading.Lock()
+    _locks_by_endpoint: dict[tuple[str, int], threading.RLock] = {}
+
+    @classmethod
+    def _shared_lock(cls, profile_dir: Path, port: int) -> threading.RLock:
+        key = (os.path.normcase(str(profile_dir)), int(port))
+        with cls._locks_guard:
+            lock = cls._locks_by_endpoint.get(key)
+            if lock is None:
+                lock = threading.RLock()
+                cls._locks_by_endpoint[key] = lock
+            return lock
+
     def __init__(self, executable: str = "", profile_dir: str = "",
                  port: int = 9229, headless: bool = False,
-                 wait_sec: float = 25, timeout: float = 30):
+                 wait_sec: float = 25, timeout: float = 30,
+                 home_url: str = WB_HOME):
+        self.home_url = home_url or WB_HOME
+        self.home_host = urlparse(self.home_url).netloc.lower()
         self.custom_executable = executable or ""
         self.profile_dir = Path(profile_dir) if profile_dir else _DEFAULT_PROFILE
         try:
@@ -311,7 +337,7 @@ class ChromeBrowserSession:
         self.headless = bool(headless)
         self.wait_sec = max(5.0, float(wait_sec or 25))
         self.timeout = max(5.0, float(timeout or 30))
-        self._lock = threading.RLock()
+        self._lock = self._shared_lock(self.profile_dir, self.port)
         self._proc: subprocess.Popen[Any] | None = None
         self._ws: Any = None
         self._next_id = 0
@@ -366,7 +392,7 @@ class ChromeBrowserSession:
         ]
         if self.headless:
             args.append("--headless=new")
-        args.append(WB_HOME)
+        args.append(self.home_url)
         kwargs: dict[str, Any] = {"stdout": subprocess.DEVNULL,
                                   "stderr": subprocess.DEVNULL,
                                   "stdin": subprocess.DEVNULL,
@@ -402,15 +428,17 @@ class ChromeBrowserSession:
             raise BrowserSessionError(f"CDP браузера не отвечает: {e!r}") from e
         pages = [t for t in targets if isinstance(t, dict)
                  and t.get("type") == "page" and t.get("webSocketDebuggerUrl")]
-        target = next((t for t in pages if "wildberries.ru" in str(t.get("url") or "")),
-                      pages[0] if pages else None)
+        target = next(
+            (t for t in pages
+             if self.home_host and self.home_host in str(t.get("url") or "")),
+            pages[0] if pages else None)
         if target is None:
             try:
                 target = self._http_json(
-                    "/json/new?" + urlencode({"url": WB_HOME}), method="PUT")
+                    "/json/new?" + urlencode({"url": self.home_url}), method="PUT")
             except Exception as e:
                 raise BrowserSessionError(
-                    f"Не удалось открыть вкладку WB в браузере: {e!r}") from e
+                    f"Не удалось открыть вкладку маркетплейса в браузере: {e!r}") from e
         ws_url = target.get("webSocketDebuggerUrl") if isinstance(target, dict) else None
         if not ws_url:
             raise BrowserSessionError("Браузер не дал адрес вкладки для CDP.")
@@ -423,7 +451,10 @@ class ChromeBrowserSession:
         self._send("Page.enable")
         self._send("Runtime.enable")
 
-    def ensure_ready(self) -> dict[str, Any]:
+    def ensure_ready(self, home_url: str | None = None) -> dict[str, Any]:
+        if home_url:
+            self.home_url = home_url
+            self.home_host = urlparse(home_url).netloc.lower()
         with self._lock:
             self._connect()
             url = ""
@@ -433,10 +464,16 @@ class ChromeBrowserSession:
                 self.close()
                 self._connect()
                 url = str(self.evaluate("location.href") or "")
-            if "wildberries.ru" not in url:
-                self.navigate(WB_HOME)
+            current_host = urlparse(url).netloc.lower()
+            same_site = bool(current_host and self.home_host and (
+                current_host == self.home_host or
+                current_host.endswith("." + self.home_host.removeprefix("www.")) or
+                self.home_host.endswith("." + current_host.removeprefix("www."))))
+            if not same_site:
+                self.navigate(self.home_url)
                 url = str(self.evaluate("location.href") or "")
-            return {"ok": True, "url": url, "executable": self.executable,
+            return {"ok": True, "url": url, "home_url": self.home_url,
+                    "executable": self.executable,
                     "profile_dir": str(self.profile_dir), "port": self.port}
 
     def close(self) -> None:
@@ -510,7 +547,7 @@ class ChromeBrowserSession:
                 exc = details.get("exception") or {}
                 text = (exc.get("description") or exc.get("value") or
                         details.get("text") or "JavaScript error")
-                raise BrowserSessionError(f"Ошибка на странице WB: {text}")
+                raise BrowserSessionError(f"Ошибка на странице маркетплейса: {text}")
             value = (result.get("result") or {}) if isinstance(result, dict) else {}
             if value.get("type") == "undefined":
                 return None
@@ -528,12 +565,35 @@ class ChromeBrowserSession:
     @staticmethod
     def _challenge_outcome(text: str) -> str | None:
         low = (text or "").lower()
-        if "подозрительная активность" in low:
+        if ("подозрительная активность" in low or "доступ ограничен" in low or
+                "похожи на автоматические" in low or
+                "автоматические запросы" in low or "antibot" in low or
+                "anti-bot" in low):
             return "suspicious"
         if ("Введите символы" in low or "введите код с картинки" in low or
-                "captcha" in low or "подтвердите, что вы не робот" in low):
+                "captcha" in low or "подтвердите, что вы не робот" in low or
+                "подтвердите, что вы человек" in low or "вы не робот" in low):
             return "captcha"
-        if "Проверяем браузер" in low or "checking your browser" in low:
+        if ("Проверяем браузер" in low or "checking your browser" in low or
+                "проверка безопасности" in low or "проверяем ваш браузер" in low):
+            return "checking"
+        return None
+
+    @classmethod
+    def _state_challenge(cls, state: dict[str, Any]) -> str | None:
+        outcome = cls._challenge_outcome(
+            f"{state.get('title') or ''}\n{state.get('text') or ''}")
+        if outcome:
+            return outcome
+        url = str(state.get("url") or "").lower()
+        # Ozon's anti-bot can sit on a nearly blank redirect/check page.
+        # Treat it as an in-progress browser check, not parse drift.  A
+        # fully rendered document can retain a harmless __rr parameter,
+        # so the URL alone is not enough once real page text exists.
+        if "__rr=" in url or "antibot" in url or "captcha" in url:
+            if state.get("ready") == "complete" and len(
+                    str(state.get("text") or "")) > 500:
+                return None
             return "checking"
         return None
 
@@ -543,7 +603,7 @@ class ChromeBrowserSession:
             nav = self._send("Page.navigate", {"url": url})
             if nav.get("errorText"):
                 raise BrowserSessionError(
-                    f"Браузер не открыл WB: {nav['errorText']}")
+                    f"Браузер не открыл страницу маркетплейса: {nav['errorText']}")
             deadline = time.monotonic() + self.wait_sec
             last_state: dict[str, Any] = {}
             while time.monotonic() < deadline:
@@ -552,31 +612,30 @@ class ChromeBrowserSession:
                     last_state = self._page_state(wait_selector)
                 except BrowserSessionError:
                     continue  # document is being replaced during navigation
-                text = str(last_state.get("text") or "")
-                challenge = self._challenge_outcome(text)
+                challenge = self._state_challenge(last_state)
                 if challenge in {"suspicious", "captcha"}:
                     raise BrowserSessionError(
-                        "WB показал проверку/подозрительную активность в окне "
+                        "Маркетплейс показал проверку/подозрительную активность в окне "
                         "браузера Price Hunter. Дождись или пройди её вручную, "
                         "оставь окно открытым и нажми проверку ещё раз.",
                         outcome="blocked")
-                if challenge == "checking":
-                    continue
                 if wait_selector and last_state.get("has"):
                     return last_state
+                if challenge == "checking":
+                    continue
                 if not wait_selector and last_state.get("ready") in {"interactive", "complete"}:
                     return last_state
-            challenge = self._challenge_outcome(str(last_state.get("text") or ""))
+            challenge = self._state_challenge(last_state)
             if challenge == "checking":
                 raise BrowserSessionError(
-                    "WB долго показывает «Проверяем браузер». Оставь окно "
-                    "Chrome/Edge Price Hunter открытым, дождись загрузки WB и "
+                    "Маркетплейс долго показывает проверку браузера. Оставь окно "
+                    "Chrome/Edge Price Hunter открытым, дождись загрузки сайта и "
                     "повтори диагностику.", outcome="blocked")
             return last_state
 
-    # -- WB operations --------------------------------------------------- #
+    # -- Marketplace operations ------------------------------------------- #
     def fetch(self, url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Fetch JSON from inside the live WB tab (real browser session)."""
+        """Fetch JSON from inside the live marketplace tab."""
         with self._lock:
             self.ensure_ready()
             full_url = url
@@ -596,41 +655,51 @@ class ChromeBrowserSession:
                 raise BrowserSessionError("Браузер вернул пустой результат fetch().")
             if result.get("status") == 0 and result.get("error"):
                 raise BrowserSessionError(
-                    f"Fetch из вкладки WB не выполнен: {result['error']}")
+                    f"Fetch из вкладки маркетплейса не выполнен: {result['error']}")
             return result
 
-    def search_dom_payload(self, query: str, page: int = 1,
-                           sort: str = "popular") -> dict[str, Any]:
-        """Open a normal WB search page and return its rendered tile text."""
+    def rendered_page_payload(self, url: str, wait_selector: str,
+                              extractor_js: str,
+                              scrolls: int = 3) -> dict[str, Any]:
+        """Open a rendered marketplace page and evaluate a tile extractor."""
         with self._lock:
-            safe_sort = sort if re.fullmatch(r"[a-z]+", sort or "") else "popular"
-            url = ("https://www.wildberries.ru/catalog/0/search.aspx?" +
-                   urlencode({"page": max(1, int(page or 1)), "sort": safe_sort,
-                              "search": query, "meta_chars": "true"},
-                             quote_via=quote_plus))
-            selector = 'a[href*="/catalog/"][href*="detail.aspx"]'
-            self.navigate(url, wait_selector=selector)
+            self.navigate(url, wait_selector=wait_selector)
             # A little scrolling lets lazy tiles render.  Keep it gentle:
             # this is a visible user browser, not a high-rate crawler.
-            for _ in range(3):
+            for _ in range(max(0, int(scrolls or 0))):
                 try:
                     self.evaluate("window.scrollBy(0, Math.floor(window.innerHeight * 0.85))")
                 except BrowserSessionError:
                     break
                 time.sleep(0.6)
-            payload = self.evaluate(_SEARCH_EXTRACT_JS)
+            payload = self.evaluate(extractor_js)
             if not isinstance(payload, dict):
                 raise BrowserSessionError(
-                    "Не удалось прочитать отрисованную выдачу WB.", outcome="bad_shape")
-            body = str(payload.get("bodyText") or "")
-            challenge = self._challenge_outcome(body)
-            if challenge:
+                    "Не удалось прочитать отрисованную выдачу маркетплейса.",
+                    outcome="bad_shape")
+            challenge = self._state_challenge({
+                "title": payload.get("title"),
+                "text": payload.get("bodyText"),
+                "url": payload.get("url"),
+            })
+            if challenge and not payload.get("items"):
                 raise BrowserSessionError(
-                    "WB показал проверку браузера на странице поиска. Оставь окно "
-                    "Price Hunter открытым, пройди проверку и повтори.",
+                    "Маркетплейс показал проверку браузера на странице поиска. "
+                    "Оставь окно Price Hunter открытым, пройди проверку и повтори.",
                     outcome="blocked")
             payload.setdefault("items", [])
             return payload
+
+    def search_dom_payload(self, query: str, page: int = 1,
+                           sort: str = "popular") -> dict[str, Any]:
+        """Open a normal WB search page and return its rendered tile text."""
+        safe_sort = sort if re.fullmatch(r"[a-z]+", sort or "") else "popular"
+        url = ("https://www.wildberries.ru/catalog/0/search.aspx?" +
+               urlencode({"page": max(1, int(page or 1)), "sort": safe_sort,
+                          "search": query, "meta_chars": "true"},
+                         quote_via=quote_plus))
+        selector = 'a[href*="/catalog/"][href*="detail.aspx"]'
+        return self.rendered_page_payload(url, selector, _SEARCH_EXTRACT_JS)
 
     def search_dom(self, query: str, page: int = 1,
                    sort: str = "popular") -> list[dict[str, Any]]:

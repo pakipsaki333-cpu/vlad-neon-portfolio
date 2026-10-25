@@ -192,6 +192,7 @@ def _settings(**over) -> Settings:
     s = Settings()
     s._data.update({"mode": "live", "queries": ["bad", "good"],
                     "sorts": ["popular"], "pages_per_query": 1,
+                    "ozon_enabled": False,
                     "wb_request_delay_sec": 0.01})
     s._data.update(over)
     return s

@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Price Hunter — охотник за ценовыми ошибками WB</title>
+<title>Price Hunter — охотник за ценовыми ошибками WB + Ozon</title>
 <style>
 :root{--bg:#070812;--panel:#101024;--panel2:#16162e;--neon:#00f0ff;--pink:#ff2e88;--green:#2bff88;--amber:#ffb02e;--text:#eef0ff;--mut:#8b8fb3;--line:#26264a}
 *{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:radial-gradient(1000px 500px at 80% -10%,#24104a 0,transparent 60%),radial-gradient(800px 400px at 0 0,#00313d 0,transparent 55%),var(--bg);color:var(--text)}
@@ -47,32 +47,39 @@ canvas.hist{width:100%;height:120px;background:#0b0b1c;border-radius:10px;margin
  <span style="flex:1"></span>
  <button class="btn" id="btnNow">⚡ Сканировать сейчас</button>
  <button class="btn2" id="btnDiag">Проверить WB</button>
+ <button class="btn2" id="btnDiagOzon">Проверить Ozon</button>
  <button class="btn2" id="btnToggle">⏸ Пауза</button>
  <button class="btn2" id="btnSettings">⚙️ Настройки</button>
 </header>
 <div id="demoBanner" class="banner" style="display:none"><span id="demoBannerText">⚠ DEMO-режим: настоящие товары не ищутся.</span></div>
 <main>
+ <div id="marketStatus" class="mut" style="margin:0 0 16px;line-height:1.6"></div>
  <div class="kpis">
-  <div class="kpi"><small>Товаров в базе</small><b id="kProducts">—</b></div>
-  <div class="kpi"><small>Находок за 24ч</small><b id="kAlerts">—</b></div>
+  <div class="kpi"><small>Товаров в базе</small><b id="kProducts">—</b><div class="mut" id="kProductsDetail"></div></div>
+  <div class="kpi"><small>Находок за 24ч</small><b id="kAlerts">—</b><div class="mut" id="kAlertsDetail"></div></div>
   <div class="kpi"><small>Лучшая скидка 24ч</small><b id="kBest">—</b></div>
   <div class="kpi"><small>Потенциальная выгода 24ч</small><b id="kSaving">—</b></div>
   <div class="kpi"><small>Сканирований</small><b id="kScans">—</b></div>
   <div class="kpi"><small>Снапшотов цен</small><b id="kSnaps">—</b></div>
  </div>
  <h2>🔥 Находки <span class="mut" style="font-size:14px">— сортировка по свежести. Красная рамка = вероятная ошибка цены, действовать немедленно.</span></h2>
- <div id="feed"><div class="empty">Сканируем WB… Первая находка появится после первого прохода. В LIVE-режиме детектор точнее с каждым часом — он накапливает историю цен и отличает настоящие падения от фейковых «скидок» продавцов.</div></div>
+ <div id="feed"><div class="empty">Сканируем включённые WB и Ozon… Первая находка появится после первого прохода. В LIVE-режиме детектор точнее с каждым часом — он накапливает отдельную историю цен по каждой площадке и отличает настоящие падения от фейковых «скидок» продавцов.</div></div>
  <h2>🧾 Журнал сканирований</h2>
- <table><thead><tr><th>Время</th><th>Режим</th><th>Запросов</th><th>Проверено</th><th>Новых</th><th>Находок</th><th>Ошибка</th></tr></thead><tbody id="runs"></tbody></table>
+ <table><thead><tr><th>Время</th><th>Режим / источники</th><th>Запросов</th><th>Проверено</th><th>Новых</th><th>Находок</th><th>Ошибка</th></tr></thead><tbody id="runs"></tbody></table>
  <h2>📦 Последние увиденные товары</h2>
- <table><thead><tr><th>Артикул</th><th>Товар</th><th>Бренд</th><th>Цена</th><th>Со скидкой</th><th>Скидка</th></tr></thead><tbody id="products"></tbody></table>
+ <table><thead><tr><th>Площадка</th><th>Артикул / SKU</th><th>Товар</th><th>Бренд</th><th>Цена</th><th>Со скидкой</th><th>Скидка</th></tr></thead><tbody id="products"></tbody></table>
 </main>
 
 <div class="modal" id="settingsModal"><div class="sheet">
  <h2 style="margin-top:0">⚙️ Настройки охотника</h2>
- <label>Режим (auto = живой WB, если недоступен — demo)</label>
- <select id="sMode"><option value="auto">auto</option><option value="live">live — только настоящий WB</option><option value="demo">demo — симуляция</option></select>
- <label>Поисковые запросы (каждый с новой строки) — выбирай ликвидные категории, где ошибку легко перепродать/использовать</label>
+ <label>Режим (auto = живые WB/Ozon; demo только если недоступны все включённые)</label>
+ <select id="sMode"><option value="auto">auto</option><option value="live">live — только настоящие WB/Ozon</option><option value="demo">demo — симуляция</option></select>
+ <label>Маркетплейсы</label>
+ <div style="display:flex;gap:22px;flex-wrap:wrap">
+  <span><input id="sWbEnabled" type="checkbox" style="width:auto"> 🟣 Wildberries</span>
+  <span><input id="sOzonEnabled" type="checkbox" style="width:auto"> 🔵 Ozon</span>
+ </div>
+ <label>Поисковые запросы (каждый с новой строки) — общие для WB и Ozon; выбирай ликвидные категории, где ошибку легко перепродать/использовать</label>
  <textarea id="sQueries" rows="7"></textarea>
  <div class="grid2">
   <div><label>Интервал сканирования, сек (минимум 60)</label><input id="sInterval" type="number"></div>
@@ -81,8 +88,12 @@ canvas.hist{width:100%;height:120px;background:#0b0b1c;border-radius:10px;margin
   <div><label>Мин. падение vs истории, %</label><input id="sMinDrop" type="number"></div>
   <div><label>Мин. исходная цена, ₽</label><input id="sMinPrice" type="number"></div>
   <div><label>Мин. выгода, ₽</label><input id="sMinSaving" type="number"></div>
-  <div><label>Транспорт WB (auto — httpx → curl_cffi → настоящий Chrome/Edge)</label><select id="sTransport"><option value="auto">auto</option><option value="chrome">chrome (настоящий браузер/CDP)</option><option value="browser">browser (curl_cffi Chrome)</option><option value="httpx">httpx (обычный)</option></select></div>
-  <div><label>Пауза между запросами WB, сек</label><input id="sDelay" type="number" step="0.1"></div>
+  <div><label>Транспорт WB (auto — httpx → curl_cffi → Chrome/Edge)</label><select id="sWbTransport"><option value="auto">auto</option><option value="chrome">chrome (настоящий браузер/CDP)</option><option value="browser">browser (curl_cffi Chrome)</option><option value="httpx">httpx (обычный)</option></select></div>
+  <div><label>Пауза WB, сек</label><input id="sWbDelay" type="number" step="0.1" min="0.5" max="10"></div>
+  <div><label>Транспорт Ozon (при 403/307 выбирай chrome)</label><select id="sOzonTransport"><option value="auto">auto</option><option value="chrome">chrome (настоящий браузер/CDP)</option><option value="browser">browser (curl_cffi Chrome)</option><option value="httpx">httpx (обычный)</option></select></div>
+  <div><label>Пауза Ozon, сек (рекомендуется 2–3+)</label><input id="sOzonDelay" type="number" step="0.1" min="1" max="10"></div>
+  <div><label><input id="sWbBrowserFallback" type="checkbox" style="width:auto"> WB: браузерный fallback в auto</label></div>
+  <div><label><input id="sOzonBrowserFallback" type="checkbox" style="width:auto"> Ozon: браузерный fallback в auto</label></div>
  </div>
  <h3>✈️ Telegram</h3>
  <p class="mut">1) @BotFather → /newbot → токен. 2) Напиши боту /start. 3) Chat id: @userinfobot. Инструкция целиком — в README.</p>
@@ -100,6 +111,11 @@ canvas.hist{width:100%;height:120px;background:#0b0b1c;border-radius:10px;margin
 const $=id=>document.getElementById(id);
 const fmt=v=>Math.round(v).toLocaleString('ru-RU')+' ₽';
 const ago=ts=>{const s=Date.now()/1000-ts;if(s<60)return'только что';if(s<3600)return Math.floor(s/60)+' мин назад';if(s<86400)return Math.floor(s/3600)+' ч назад';return Math.floor(s/86400)+' д назад'};
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const market=a=>(a&&a.marketplace)||(((a&&a.url)||'').includes('ozon.')?'ozon':'wb');
+const marketLabel=a=>{const m=typeof a==='string'?a:market(a);return m==='ozon'?'🔵 Ozon':'🟣 WB'};
+const idLabel=a=>market(a)==='ozon'?'SKU':'арт.';
+const runLabel=s=>{const raw=String(s||'');if(raw.startsWith('live:'))return 'LIVE '+raw.slice(5).split('+').map(x=>marketLabel(x)).join(' + ');return raw.toUpperCase()||'—'};
 let lastTopId=0, running=true;
 function beep(){try{const c=new (window.AudioContext||webkitAudioContext)();const o=c.createOscillator(),g=c.createGain();o.frequency.value=880;o.connect(g);g.connect(c.destination);g.gain.setValueAtTime(.15,c.currentTime);o.start();o.stop(c.currentTime+.35)}catch(e){}}
 async function j(url,opt){const r=await fetch(url,opt);if(!r.ok)throw new Error((await r.text()).slice(0,300));return r.json()}
@@ -108,45 +124,51 @@ async function refresh(){
  try{
   const st=await j('/api/status'); running=st.running;
   const mode=st.effective_mode||st.mode, req=st.requested_mode||st.mode;
-  $('modeBadge').textContent=mode==='live'?'LIVE · Wildberries':(req==='demo'?'DEMO · включён вручную':(mode==='demo'?'DEMO · WB недоступен':String(mode).toUpperCase()));
+  const markets=st.marketplaces||{}, enabled=['wb','ozon'].filter(m=>(markets[m]||{}).enabled!==false);
+  const available=enabled.filter(m=>(markets[m]||{}).available===true), unavailable=enabled.filter(m=>(markets[m]||{}).available===false);
+  const liveTxt='LIVE · '+(available.length?available.map(marketLabel).join(' + '):enabled.map(marketLabel).join(' + '))+(available.length&&unavailable.length?' · нет: '+unavailable.map(marketLabel).join(', '):'');
+  $('modeBadge').textContent=mode==='live'?liveTxt:(req==='demo'?'DEMO · включён вручную':(mode==='demo'?'DEMO · живые источники недоступны':String(mode).toUpperCase()));
   $('modeBadge').className='badge '+(mode==='live'?'live':'demo'); $('demoBanner').style.display=mode==='demo'?'block':'none';
-  if(mode==='demo')$('demoBannerText').textContent=req==='demo'?'⚠ DEMO включён вручную: настоящие товары WB НЕ ищутся, находки сгенерированы. Для охоты: Настройки → режим live (или auto) → Сохранить → «Проверить WB».':('⚠ WB недоступен — временный DEMO, настоящие товары не ищутся. Причина: '+(st.mode_reason||st.last_error||'неизвестна')+' Нажми «Проверить WB».');
+  if(mode==='demo')$('demoBannerText').textContent=req==='demo'?'⚠ DEMO включён вручную: настоящие товары WB/Ozon НЕ ищутся, находки сгенерированы. Для охоты: Настройки → режим live (или auto) → Сохранить → проверь включённые маркетплейсы.':('⚠ Все включённые живые источники недоступны — временный DEMO, настоящие товары не ищутся. Причина: '+(st.mode_reason||st.last_error||'неизвестна')+' Нажми «Проверить WB» и «Проверить Ozon».');
+  $('marketStatus').textContent='Источники: '+enabled.map(m=>{const x=markets[m]||{};const state=x.available===true?'✓ доступен':x.available===false?'✗ недоступен':'— ещё не проверен';return marketLabel(m)+' '+state+' · транспорт '+(x.transport||'auto')+' · товаров за проход '+(x.last_products||0)}).join('  |  ')+(st.mode_reason?'  ·  '+st.mode_reason:'');
   $('runState').innerHTML=`<span class="dot ${running?'':'off'}"></span>${st.scanning?'сканирую…':running?(st.next_scan_ts?('след. проход через '+Math.max(0,st.next_scan_ts-Math.floor(Date.now()/1000))+' с'):'работает'):'на паузе'}`;
   $('btnToggle').textContent=running?'⏸ Пауза':'▶️ Запуск';
-  const s=st.stats; $('kProducts').textContent=s.products_seen;$('kAlerts').textContent=s.alerts_today;$('kBest').textContent='−'+Math.round(s.best_discount_today)+'%';$('kSaving').textContent=fmt(s.potential_saving_today);$('kScans').textContent=s.scans_total;$('kSnaps').textContent=s.snapshots;
+  const s=st.stats; $('kProducts').textContent=s.products_seen;$('kProductsDetail').textContent='WB '+(s.products_wb||0)+' · Ozon '+(s.products_ozon||0);$('kAlerts').textContent=s.alerts_today;$('kAlertsDetail').textContent='WB '+(s.alerts_today_wb||0)+' · Ozon '+(s.alerts_today_ozon||0);$('kBest').textContent='−'+Math.round(s.best_discount_today)+'%';$('kSaving').textContent=fmt(s.potential_saving_today);$('kScans').textContent=s.scans_total;$('kSnaps').textContent=s.snapshots;
   const {alerts}=await j('/api/alerts?limit=60');
   if(alerts.length&&alerts[0].id>lastTopId){if(lastTopId)beep();lastTopId=alerts[0].id}
   $('feed').innerHTML=alerts.length?alerts.map(a=>`<div class="card ${a.level}">
     ${photo(a)}
-    <div><div class="mut">${a.level==='FIRE'?'🔥🔥 ЦЕНОВАЯ ОШИБКА':a.level==='HOT'?'🔥 Резкое падение':'👀 Подозрительно дёшево'} · ${ago(a.ts)} · арт. <a href="${a.url}" target="_blank">${a.nm}</a> ${a.source==='demo'?'<span class="badge demo">DEMO</span>':''} ${a.telegram_sent?'✈️ отправлено':''}</div>
-    <div style="font-weight:800;margin:3px 0">${a.brand||''} — ${a.name||''}</div>
+    <div><div class="mut">${a.level==='FIRE'?'🔥🔥 ЦЕНОВАЯ ОШИБКА':a.level==='HOT'?'🔥 Резкое падение':'👀 Подозрительно дёшево'} · ${marketLabel(a)} · ${ago(a.ts)} · ${idLabel(a)} <a href="${esc(a.url)}" target="_blank" rel="noopener">${a.nm}</a> ${a.source==='demo'?'<span class="badge demo">DEMO</span>':''} ${a.telegram_sent?'✈️ отправлено':''}</div>
+    <div style="font-weight:800;margin:3px 0">${a.brand?esc(a.brand)+' — ':''}${esc(a.name||'')}</div>
     <div><span class="price">${fmt(a.sale_price)}</span><span class="old">${fmt(a.price)}</span><span class="disc">−${Math.round(a.discount_pct)}%</span></div>
     <div class="mut">Выгода ${fmt(a.saving)}${a.drop_vs_median_pct?` · на ${Math.round(a.drop_vs_median_pct)}% ниже медианы истории (${fmt(a.hist_median)})`:''} · скор ${a.score}/100</div>
     <div class="score"><i style="width:${a.score}%"></i></div>
-    <div class="tags">${(a.reasons||[]).map(r=>`<span class="tag">${r}</span>`).join('')}</div>
+    <div class="tags">${(a.reasons||[]).map(r=>`<span class="tag">${esc(r)}</span>`).join('')}</div>
     <div id="hist-${a.id}"></div></div>
-    <div class="right"><a class="btn-buy" href="${a.url}" target="_blank">🛒 КУПИТЬ</a>
-    <button class="btn2" onclick="showHist(${a.nm},${a.id})">📉 История цены</button>
+    <div class="right"><a class="btn-buy" href="${esc(a.url)}" target="_blank" rel="noopener">🛒 КУПИТЬ</a>
+    <button class="btn2" onclick="showHist(${a.nm},${a.id},'${market(a)}')">📉 История цены</button>
     <button class="btn2" onclick="dismissA(${a.id})">Скрыть</button></div></div>`).join(''):$('feed').innerHTML;
   const {runs}=await j('/api/runs?limit=10');
-  $('runs').innerHTML=runs.map(r=>`<tr><td>${new Date(r.ts*1000).toLocaleTimeString('ru-RU')}</td><td>${r.source}</td><td>${r.queries}</td><td>${r.scanned}</td><td>${r.new_products}</td><td>${r.alerts}</td><td>${r.error||'—'}</td></tr>`).join('');
+  $('runs').innerHTML=runs.map(r=>`<tr><td>${new Date(r.ts*1000).toLocaleTimeString('ru-RU')}</td><td>${esc(runLabel(r.source))}</td><td>${r.queries}</td><td>${r.scanned}</td><td>${r.new_products}</td><td>${r.alerts}</td><td>${esc(r.error||'—')}</td></tr>`).join('');
   const {products}=await j('/api/products?limit=25');
-  $('products').innerHTML=products.map(p=>`<tr><td><a href="https://www.wildberries.ru/catalog/${p.nm}/detail.aspx" target="_blank">${p.nm}</a></td><td>${(p.name||'').slice(0,60)}</td><td>${p.brand||''}</td><td>${fmt(p.last_price||0)}</td><td>${fmt(p.last_sale_price||0)}</td><td>${p.last_price?'−'+Math.round((1-p.last_sale_price/p.last_price)*100)+'%':'—'}</td></tr>`).join('');
+  $('products').innerHTML=products.map(p=>`<tr><td>${marketLabel(p)}</td><td><a href="${esc(p.url||'#')}" target="_blank" rel="noopener">${p.nm}</a></td><td>${esc((p.name||'').slice(0,60))}</td><td>${esc(p.brand||'')}</td><td>${fmt(p.last_price||0)}</td><td>${fmt(p.last_sale_price||0)}</td><td>${p.last_price?'−'+Math.round((1-p.last_sale_price/p.last_price)*100)+'%':'—'}</td></tr>`).join('');
  }catch(e){console.warn(e)}
 }
 async function dismissA(id){await j('/api/alerts/'+id+'/dismiss',{method:'POST'});refresh()}
-async function showHist(nm,id){const el=$('hist-'+id);const {history}=await j('/api/product/'+nm+'/history');
+async function showHist(nm,id,marketplace='wb'){const el=$('hist-'+id);const {history}=await j('/api/product/'+marketplace+'/'+nm+'/history');
  if(history.length<2){el.innerHTML='<div class="mut">Истории пока мало — нужно несколько сканирований.</div>';return}
  el.innerHTML='<canvas class="hist" width="640" height="120"></canvas>';const c=el.querySelector('canvas'),x=c.getContext('2d');
  const ps=history.map(h=>h.sale_price),mn=Math.min(...ps),mx=Math.max(...ps),rg=(mx-mn)||1;
  x.strokeStyle='#00f0ff';x.lineWidth=2;x.beginPath();history.forEach((h,i)=>{const px=10+i*(620/(history.length-1)),py=105-((h.sale_price-mn)/rg)*90;i?x.lineTo(px,py):x.moveTo(px,py)});x.stroke();
  x.fillStyle='#8b8fb3';x.font='12px sans-serif';x.fillText('min '+fmt(mn)+' · max '+fmt(mx),10,14)}
 $('btnNow').onclick=async()=>{await j('/api/scan/now',{method:'POST'});setTimeout(refresh,1200)};
-$('btnDiag').onclick=async()=>{const b=$('btnDiag');b.disabled=true;b.textContent='Проверяю WB…';try{const r=await j('/api/wb/diagnose',{method:'POST'});alert((r.message||'')+(r.sample?'\nПример: '+r.sample:'')+(r.requested_mode==='demo'?'\nВАЖНО: сейчас выбран DEMO — переключи режим на live/auto и сохрани.':'')+(r.hint?'\n'+r.hint:''))}catch(e){alert('Диагностика не удалась: '+e.message)}finally{b.disabled=false;b.textContent='Проверить WB';refresh()}};
+async function diagnoseMarketplace(marketplace,btnId,label){const b=$(btnId),old=b.textContent;b.disabled=true;b.textContent='Проверяю '+label+'…';try{const r=await j('/api/'+marketplace+'/diagnose',{method:'POST'});alert((r.message||'')+(r.sample?'\nПример: '+r.sample:'')+(marketplace==='wb'&&r.ok&&r.card_ok===false?'\nПоиск работает; проверка карточки WB не прошла, это некритично.':'')+(r.enabled===false?'\nВАЖНО: источник выключен в настройках — проверка отдельная, в скан он не войдёт, пока не включишь.':'')+(r.requested_mode==='demo'?'\nВАЖНО: сейчас выбран DEMO — переключи режим на live/auto и сохрани.':'')+(r.hint?'\n'+r.hint:''))}catch(e){alert('Диагностика '+label+' не удалась: '+e.message)}finally{b.disabled=false;b.textContent=old;refresh()}}
+$('btnDiag').onclick=()=>diagnoseMarketplace('wb','btnDiag','WB');
+$('btnDiagOzon').onclick=()=>diagnoseMarketplace('ozon','btnDiagOzon','Ozon');
 $('btnToggle').onclick=async()=>{await j(running?'/api/scan/stop':'/api/scan/start',{method:'POST'});refresh()};
-$('btnSettings').onclick=async()=>{const s=await j('/api/settings');$('sMode').value=s.mode;$('sQueries').value=(s.queries||[]).join('\n');$('sInterval').value=s.interval_sec;$('sPages').value=s.pages_per_query;$('sMinDisc').value=s.min_discount_pct;$('sMinDrop').value=s.min_drop_vs_history_pct;$('sMinPrice').value=s.min_original_price_rub;$('sMinSaving').value=s.min_saving_rub;$('sTransport').value=s.wb_transport||'auto';$('sDelay').value=s.wb_request_delay_sec||1.2;$('sTgChat').value=s.telegram_chat_id||'';$('tokHint').textContent=s.telegram_configured?('(уже задан: '+(s.telegram_token_masked||'')+')'):'';$('settingsModal').classList.add('open')};
+$('btnSettings').onclick=async()=>{const s=await j('/api/settings');$('sMode').value=s.mode;$('sWbEnabled').checked=s.wb_enabled!==false;$('sOzonEnabled').checked=s.ozon_enabled!==false;$('sQueries').value=(s.queries||[]).join('\n');$('sInterval').value=s.interval_sec;$('sPages').value=s.pages_per_query;$('sMinDisc').value=s.min_discount_pct;$('sMinDrop').value=s.min_drop_vs_history_pct;$('sMinPrice').value=s.min_original_price_rub;$('sMinSaving').value=s.min_saving_rub;$('sWbTransport').value=s.wb_transport||'auto';$('sWbDelay').value=s.wb_request_delay_sec||1.2;$('sOzonTransport').value=s.ozon_transport||'auto';$('sOzonDelay').value=s.ozon_request_delay_sec||3;$('sWbBrowserFallback').checked=s.wb_browser_fallback!==false;$('sOzonBrowserFallback').checked=s.ozon_browser_fallback!==false;$('sTgChat').value=s.telegram_chat_id||'';$('tokHint').textContent=s.telegram_configured?('(уже задан: '+(s.telegram_token_masked||'')+')'):'';$('settingsModal').classList.add('open')};
 $('btnClose').onclick=()=>$('settingsModal').classList.remove('open');
-$('btnSave').onclick=async()=>{const body={mode:$('sMode').value,queries:$('sQueries').value.split('\n').map(x=>x.trim()).filter(Boolean),interval_sec:+$('sInterval').value,pages_per_query:+$('sPages').value,min_discount_pct:+$('sMinDisc').value,min_drop_vs_history_pct:+$('sMinDrop').value,min_original_price_rub:+$('sMinPrice').value,min_saving_rub:+$('sMinSaving').value,wb_transport:$('sTransport').value,wb_request_delay_sec:+$('sDelay').value,telegram_chat_id:$('sTgChat').value.trim(),telegram_token:$('sTgToken').value.trim()};
+$('btnSave').onclick=async()=>{if(!$('sWbEnabled').checked&&!$('sOzonEnabled').checked){$('setMsg').textContent='❌ Включи хотя бы WB или Ozon';return}const body={mode:$('sMode').value,wb_enabled:$('sWbEnabled').checked,ozon_enabled:$('sOzonEnabled').checked,queries:$('sQueries').value.split('\n').map(x=>x.trim()).filter(Boolean),interval_sec:+$('sInterval').value,pages_per_query:+$('sPages').value,min_discount_pct:+$('sMinDisc').value,min_drop_vs_history_pct:+$('sMinDrop').value,min_original_price_rub:+$('sMinPrice').value,min_saving_rub:+$('sMinSaving').value,wb_transport:$('sWbTransport').value,wb_request_delay_sec:+$('sWbDelay').value,ozon_transport:$('sOzonTransport').value,ozon_request_delay_sec:+$('sOzonDelay').value,wb_browser_fallback:$('sWbBrowserFallback').checked,ozon_browser_fallback:$('sOzonBrowserFallback').checked,telegram_chat_id:$('sTgChat').value.trim(),telegram_token:$('sTgToken').value.trim()};
  try{await j('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});$('setMsg').textContent='✅ Сохранено';refresh()}catch(e){$('setMsg').textContent='❌ '+e.message}};
 $('btnTgTest').onclick=async()=>{try{await j('/api/telegram/test',{method:'POST'});$('setMsg').textContent='✅ Проверь Telegram'}catch(e){$('setMsg').textContent='❌ '+e.message}};
 refresh();setInterval(refresh,8000);

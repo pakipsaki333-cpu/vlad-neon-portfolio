@@ -23,6 +23,30 @@ BG, PANEL, PANEL2 = "#070812", "#101024", "#16162e"
 NEON, PINK, GREEN, AMBER = "#00f0ff", "#ff2e88", "#2bff88", "#ffb02e"
 TEXT, MUT, LINE = "#eef0ff", "#8b8fb3", "#26264a"
 LEVEL_ICON = {"FIRE": "!!! ОШИБКА ЦЕНЫ", "HOT": "! Резкое падение", "WATCH": "Подозрительно дёшево"}
+MARKETPLACE_LABELS = {"wb": "🟣 WB", "ozon": "🔵 Ozon"}
+MARKETPLACE_ID_LABELS = {"wb": "Арт. WB", "ozon": "SKU Ozon"}
+
+
+def _marketplace_of(item: dict) -> str:
+    marketplace = str((item or {}).get("marketplace") or "").lower()
+    if marketplace in MARKETPLACE_LABELS:
+        return marketplace
+    return "ozon" if "ozon." in str((item or {}).get("url") or "") else "wb"
+
+
+def _marketplace_label(item_or_key) -> str:
+    key = _marketplace_of(item_or_key) if isinstance(item_or_key, dict) \
+        else str(item_or_key or "wb").lower()
+    return MARKETPLACE_LABELS.get(key, MARKETPLACE_LABELS["wb"])
+
+
+def _run_source_label(source) -> str:
+    raw = str(source or "")
+    if raw.startswith("live:"):
+        labels = [MARKETPLACE_LABELS.get(x, x.upper())
+                  for x in raw[5:].split("+") if x]
+        return "LIVE " + "+".join(labels)
+    return raw.upper() if raw else "—"
 
 
 def _fmt_ts(ts) -> str:
@@ -42,7 +66,7 @@ class PriceHunterApp:
         self._tray_hint_shown = False
         self.v: dict[str, tk.Variable] = {}
 
-        root.title("Price Hunter — ценовые ошибки WB")
+        root.title("Price Hunter — ценовые ошибки WB + Ozon")
         root.geometry("1180x780")
         root.minsize(960, 640)
         root.configure(bg=BG)
@@ -144,6 +168,7 @@ class PriceHunterApp:
                  font=("Segoe UI", 11, "bold"), wraplength=1050,
                  justify="left", anchor="w").pack(fill="x", pady=2)
         self.var_wb_warn = tk.StringVar(value="")
+        self.var_market_warn = self.var_wb_warn
         tk.Label(f, textvariable=self.var_wb_warn, bg=BG, fg=PINK,
                  font=("Segoe UI", 11, "bold"), wraplength=1050,
                  justify="left", anchor="w").pack(fill="x", pady=2)
@@ -156,11 +181,19 @@ class PriceHunterApp:
                    command=lambda: self.nb.select(1)).pack(side="left", padx=4)
         ttk.Button(actions, text="Свернуть в трей",
                    command=self._hide_to_tray).pack(side="left", padx=4)
-        ttk.Button(actions, text="Проверить соединение WB",
+
+        market_actions = ttk.Frame(f)
+        market_actions.pack(fill="x", pady=(0, 4))
+        ttk.Button(market_actions, text="Проверить WB",
                    style="Accent.TButton",
                    command=lambda: self._diagnose_wb()).pack(side="left", padx=4)
-        ttk.Button(actions, text="Открыть браузер WB",
+        ttk.Button(market_actions, text="Проверить Ozon",
+                   style="Accent.TButton",
+                   command=lambda: self._diagnose_ozon()).pack(side="left", padx=4)
+        ttk.Button(market_actions, text="Открыть браузер WB",
                    command=lambda: self._open_wb_browser()).pack(side="left", padx=4)
+        ttk.Button(market_actions, text="Открыть браузер Ozon",
+                   command=lambda: self._open_ozon_browser()).pack(side="left", padx=4)
 
         tk.Label(f, text="Последние находки (двойной клик — открыть товар):",
                  bg=BG, fg=MUT, font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(10, 4))
@@ -174,10 +207,12 @@ class PriceHunterApp:
     # ------------------------------ Находки --------------------------- #
     def _build_finds(self):
         f = self._tab("Находки")
-        cols = ("time", "level", "name", "sale", "old", "disc", "saving", "score")
+        cols = ("time", "level", "marketplace", "name", "sale", "old",
+                "disc", "saving", "score")
         self.tree = ttk.Treeview(f, columns=cols, show="headings", height=18)
         for col, title, w in [("time", "Время", 90), ("level", "Уровень", 130),
-                              ("name", "Товар", 380), ("sale", "Цена", 110),
+                              ("marketplace", "Площадка", 105),
+                              ("name", "Товар", 330), ("sale", "Цена", 110),
                               ("old", "Была", 110), ("disc", "Скидка", 80),
                               ("saving", "Выгода", 110), ("score", "Скор", 60)]:
             self.tree.heading(col, text=title)
@@ -263,55 +298,88 @@ class PriceHunterApp:
         tk.Label(tg, textvariable=self.var_tg_test, bg=PANEL, fg=TEXT).grid(row=5, column=2, sticky="w")
 
         # Scanning
-        sc = self._section(f, "Сканирование WB")
+        sc = self._section(f, "Сканирование WB + Ozon")
         tk.Label(sc, text="Режим", bg=PANEL, fg=MUT, font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky="w", pady=3, padx=(0, 8))
         ttk.Combobox(sc, textvariable=self._svar("mode", "auto"), state="readonly",
                      values=["auto", "live", "demo"], width=16).grid(row=0, column=1, sticky="w", pady=3)
-        tk.Label(sc, text="live = только настоящий WB; auto = WB, при недоступности временный demo с повторной проверкой; demo = симуляция, товары не ищутся",
+        tk.Label(sc, text="live = только настоящие WB/Ozon; auto = живые источники, а DEMO только если недоступны все включённые; demo = симуляция, товары не ищутся",
                  bg=PANEL, fg=MUT, wraplength=620, justify="left").grid(row=0, column=2, sticky="w", padx=8)
-        self._field(sc, 1, "Интервал, сек (минимум 60)", self._svar("interval_sec"))
-        self._field(sc, 2, "Страниц на запрос", self._svar("pages_per_query"))
+        tk.Label(sc, text="Маркетплейсы", bg=PANEL, fg=MUT,
+                 font=("Segoe UI", 9, "bold")).grid(row=1, column=0, sticky="w", pady=3, padx=(0, 8))
+        markets_row = tk.Frame(sc, bg=PANEL)
+        markets_row.grid(row=1, column=1, sticky="w", columnspan=2)
+        ttk.Checkbutton(markets_row, text="🟣 Wildberries",
+                        variable=self._bvar("wb_enabled", True)).pack(side="left", padx=6)
+        ttk.Checkbutton(markets_row, text="🔵 Ozon",
+                        variable=self._bvar("ozon_enabled", True)).pack(side="left", padx=6)
+        tk.Label(markets_row, text="Источники независимы: падение одного не отменяет товары другого",
+                 bg=PANEL, fg=MUT).pack(side="left", padx=8)
+        self._field(sc, 2, "Интервал, сек (минимум 60)", self._svar("interval_sec"))
+        self._field(sc, 3, "Страниц на запрос", self._svar("pages_per_query"))
         tk.Label(sc, text="Сортировки выдачи", bg=PANEL, fg=MUT,
-                 font=("Segoe UI", 9, "bold")).grid(row=3, column=0, sticky="w", pady=3, padx=(0, 8))
+                 font=("Segoe UI", 9, "bold")).grid(row=4, column=0, sticky="w", pady=3, padx=(0, 8))
         sorts_row = tk.Frame(sc, bg=PANEL)
-        sorts_row.grid(row=3, column=1, sticky="w", columnspan=2)
+        sorts_row.grid(row=4, column=1, sticky="w", columnspan=2)
         for key, lbl in [("sort_popular", "popular — популярные"),
                          ("sort_benefit", "benefit — по выгоде"),
                          ("sort_priceup", "priceup — сначала дешёвые")]:
             ttk.Checkbutton(sorts_row, text=lbl, variable=self._bvar(key)).pack(side="left", padx=6)
-        self._field(sc, 4, "Регион WB (dest)", self._svar("dest"))
-        tk.Label(sc, text="−1257786 = Москва", bg=PANEL, fg=MUT).grid(row=4, column=2, sticky="w", padx=8)
-        self._field(sc, 5, "СПП/WB Кошелёк, %", self._svar("spp"))
+        self._field(sc, 5, "Регион WB (dest)", self._svar("dest"))
+        tk.Label(sc, text="−1257786 = Москва (только WB)", bg=PANEL, fg=MUT).grid(row=5, column=2, sticky="w", padx=8)
+        self._field(sc, 6, "СПП/WB Кошелёк, %", self._svar("spp"))
+
         tk.Label(sc, text="Транспорт WB", bg=PANEL, fg=MUT,
-                 font=("Segoe UI", 9, "bold")).grid(row=6, column=0, sticky="w", pady=3, padx=(0, 8))
+                 font=("Segoe UI", 9, "bold")).grid(row=7, column=0, sticky="w", pady=3, padx=(0, 8))
         ttk.Combobox(sc, textvariable=self._svar("wb_transport", "auto"),
                      state="readonly", values=["auto", "chrome", "browser", "httpx"],
-                     width=16).grid(row=6, column=1, sticky="w", pady=3)
-        tk.Label(sc, text="auto: httpx → curl_cffi → настоящий Chrome/Edge. chrome: сразу настоящий браузер (нужен, если диагностика показывает 403 и у httpx, и у browser); browser = только имитация curl_cffi",
-                 bg=PANEL, fg=MUT, wraplength=620, justify="left").grid(row=6, column=2, sticky="w", padx=8)
-        ttk.Checkbutton(sc, text="В auto при 403 открывать настоящий Chrome/Edge",
-                        variable=self._bvar("wb_browser_fallback", True)).grid(
-                            row=7, column=1, sticky="w", pady=3)
-        tk.Label(sc, text="Откроется отдельное окно с собственным профилем Price Hunter. Не закрывай его во время охоты; куки никуда не отправляются",
+                     width=16).grid(row=7, column=1, sticky="w", pady=3)
+        tk.Label(sc, text="auto: httpx → curl_cffi → настоящий Chrome/Edge/DOM. На ПК, где работает только chrome-dom, удобнее сразу chrome",
                  bg=PANEL, fg=MUT, wraplength=620, justify="left").grid(row=7, column=2, sticky="w", padx=8)
-        self._field(sc, 8, "Путь к Chrome/Edge (необязательно)",
+        ttk.Checkbutton(sc, text="WB: в auto при блоке открывать настоящий Chrome/Edge",
+                        variable=self._bvar("wb_browser_fallback", True)).grid(
+                            row=8, column=1, sticky="w", pady=3)
+        self._field(sc, 9, "Пауза WB, сек", self._svar("wb_request_delay_sec"))
+
+        tk.Label(sc, text="Транспорт Ozon", bg=PANEL, fg=MUT,
+                 font=("Segoe UI", 9, "bold")).grid(row=10, column=0, sticky="w", pady=3, padx=(0, 8))
+        ttk.Combobox(sc, textvariable=self._svar("ozon_transport", "auto"),
+                     state="readonly", values=["auto", "chrome", "browser", "httpx"],
+                     width=16).grid(row=10, column=1, sticky="w", pady=3)
+        tk.Label(sc, text="Ozon чаще пропускает только настоящий браузер: composer JSON внутри вкладки, затем отрисованный DOM. Если httpx/browser дают 403/307 — выбери chrome",
+                 bg=PANEL, fg=MUT, wraplength=620, justify="left").grid(row=10, column=2, sticky="w", padx=8)
+        ttk.Checkbutton(sc, text="Ozon: в auto при блоке открывать настоящий Chrome/Edge",
+                        variable=self._bvar("ozon_browser_fallback", True)).grid(
+                            row=11, column=1, sticky="w", pady=3)
+        self._field(sc, 12, "Пауза Ozon, сек", self._svar("ozon_request_delay_sec"))
+        tk.Label(sc, text="Для Ozon держи минимум 2–3 сек и 1 страницу на запрос",
+                 bg=PANEL, fg=MUT).grid(row=12, column=2, sticky="w", padx=8)
+
+        self._field(sc, 13, "Путь к Chrome/Edge (необязательно)",
                     self._svar("wb_browser_path"), width=52)
-        tk.Label(sc, text="Оставь пустым для автопоиска chrome.exe/msedge.exe",
-                 bg=PANEL, fg=MUT).grid(row=8, column=2, sticky="w", padx=8)
-        self._field(sc, 9, "Порт браузера WB", self._svar("wb_browser_port"))
-        self._field(sc, 10, "Ожидание браузера, сек", self._svar("wb_browser_wait_sec"))
-        ttk.Checkbutton(sc, text="Скрытый браузер (headless; проверку WB вручную не пройти)",
+        tk.Label(sc, text="Общий браузер WB+Ozon; пусто = автопоиск chrome.exe/msedge.exe",
+                 bg=PANEL, fg=MUT).grid(row=13, column=2, sticky="w", padx=8)
+        self._field(sc, 14, "Порт браузера", self._svar("wb_browser_port"))
+        self._field(sc, 15, "Ожидание браузера, сек", self._svar("wb_browser_wait_sec"))
+        ttk.Checkbutton(sc, text="Скрытый браузер (headless; проверки WB/Ozon вручную не пройти)",
                         variable=self._bvar("wb_browser_headless", False)).grid(
-                            row=11, column=1, sticky="w", pady=3, columnspan=2)
-        self._field(sc, 12, "Пауза между запросами WB, сек", self._svar("wb_request_delay_sec"))
-        self._field(sc, 13, "Повторная проверка LIVE, сек", self._svar("live_probe_interval_sec"))
-        self.var_wb_diag = tk.StringVar(value="")
+                            row=16, column=1, sticky="w", pady=3, columnspan=2)
+        tk.Label(sc, text="WB и Ozon работают по очереди в одном отдельном профиле Price Hunter. Вход в аккаунты не нужен; куки никуда не отправляются; окно не закрывай во время охоты",
+                 bg=PANEL, fg=MUT, wraplength=980, justify="left").grid(row=17, column=0, columnspan=3, sticky="w", pady=3)
+        self._field(sc, 18, "Повторная проверка LIVE, сек", self._svar("live_probe_interval_sec"))
+
+        self.var_mp_diag = tk.StringVar(value="")
+        self.var_wb_diag = self.var_mp_diag
+        self.var_ozon_diag = self.var_mp_diag
         ttk.Button(sc, text="Сохранить и проверить WB", style="Accent.TButton",
-                   command=lambda: self._diagnose_wb(save_first=True)).grid(row=14, column=1, sticky="w", pady=6)
+                   command=lambda: self._diagnose_wb(save_first=True)).grid(row=19, column=1, sticky="w", pady=6)
         ttk.Button(sc, text="Открыть браузер WB",
-                   command=lambda: self._open_wb_browser(save_first=True)).grid(row=14, column=2, sticky="w", pady=6, padx=8)
-        tk.Label(sc, textvariable=self.var_wb_diag, bg=PANEL, fg=TEXT,
-                 wraplength=980, justify="left").grid(row=15, column=0, columnspan=3, sticky="w", pady=4)
+                   command=lambda: self._open_wb_browser(save_first=True)).grid(row=19, column=2, sticky="w", pady=6, padx=8)
+        ttk.Button(sc, text="Сохранить и проверить Ozon", style="Accent.TButton",
+                   command=lambda: self._diagnose_ozon(save_first=True)).grid(row=20, column=1, sticky="w", pady=6)
+        ttk.Button(sc, text="Открыть браузер Ozon",
+                   command=lambda: self._open_ozon_browser(save_first=True)).grid(row=20, column=2, sticky="w", pady=6, padx=8)
+        tk.Label(sc, textvariable=self.var_mp_diag, bg=PANEL, fg=TEXT,
+                 wraplength=980, justify="left").grid(row=21, column=0, columnspan=3, sticky="w", pady=4)
 
         # Detector
         dt = self._section(f, "Детектор аномалий")
@@ -321,7 +389,7 @@ class PriceHunterApp:
         self._field(dt, 3, "Мин. выгода, ₽", self._svar("min_saving_rub"))
         self._field(dt, 4, "Мин. скор (0–100)", self._svar("min_score"))
         self._field(dt, 5, "Кулдаун повторных алертов, ч", self._svar("alert_cooldown_hours"))
-        ttk.Checkbutton(dt, text="Проверять по истории цен WB (price-history) — отсекает фейковые скидки",
+        ttk.Checkbutton(dt, text="Проверять внешней историей WB и собственной историей базы (для WB и Ozon)",
                         variable=self._bvar("verify_with_price_history", True)).grid(row=6, column=0, columnspan=3, sticky="w", pady=4)
 
         # Queries
@@ -362,7 +430,7 @@ class PriceHunterApp:
         f = self._tab("Журнал")
         cols = ("time", "mode", "queries", "scanned", "new", "alerts", "error")
         self.tree_runs = ttk.Treeview(f, columns=cols, show="headings", height=22)
-        for col, title, w in [("time", "Время", 110), ("mode", "Режим", 80),
+        for col, title, w in [("time", "Время", 110), ("mode", "Режим / источники", 150),
                               ("queries", "Запросов", 90), ("scanned", "Проверено", 110),
                               ("new", "Новых", 80), ("alerts", "Находок", 90),
                               ("error", "Ошибка", 420)]:
@@ -381,18 +449,19 @@ class PriceHunterApp:
         for key in ("mode", "interval_sec", "pages_per_query", "min_discount_pct",
                     "min_drop_vs_history_pct", "min_original_price_rub",
                     "min_saving_rub", "min_score", "alert_cooldown_hours",
-                    "dest", "spp", "wb_transport", "wb_browser_path",
-                    "wb_browser_port", "wb_browser_wait_sec",
-                    "wb_request_delay_sec", "live_probe_interval_sec",
-                    "telegram_chat_id"):
+                    "dest", "spp", "wb_transport", "ozon_transport",
+                    "wb_browser_path", "wb_browser_port", "wb_browser_wait_sec",
+                    "wb_request_delay_sec", "ozon_request_delay_sec",
+                    "live_probe_interval_sec", "telegram_chat_id"):
             self.v[key].set(str(cfg.get(key, "")))
         self.v["telegram_token"].set("")   # never echo the secret back
         self.var_token_hint.set(
             f"сохранён: {pub['telegram_token_masked']}" if pub.get("telegram_token_masked")
             else "ещё не задан")
         for key in ("telegram_enabled", "verify_with_price_history",
-                    "wb_browser_fallback", "wb_browser_headless",
-                    "close_to_tray", "start_minimized"):
+                    "wb_enabled", "ozon_enabled",
+                    "wb_browser_fallback", "ozon_browser_fallback",
+                    "wb_browser_headless", "close_to_tray", "start_minimized"):
             self.v[key].set(bool(cfg.get(key)))
         sorts = set(cfg.get("sorts") or [])
         self.v["sort_popular"].set("popular" in sorts)
@@ -441,54 +510,91 @@ class PriceHunterApp:
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _open_wb_browser(self, save_first: bool = False):
+    def _open_marketplace_browser(self, marketplace: str,
+                                  save_first: bool = False):
         if save_first and not self._save_settings():
             return
-        self.var_wb_diag.set("Открываю отдельный Chrome/Edge для WB…")
+        marketplace = marketplace if marketplace in MARKETPLACE_LABELS else "wb"
+        label = _marketplace_label(marketplace)
+        site = "Wildberries" if marketplace == "wb" else "Ozon"
+        diag_var = getattr(self, "var_mp_diag", getattr(self, "var_wb_diag", None))
+        if diag_var is not None:
+            diag_var.set(f"Открываю отдельный Chrome/Edge для {site}…")
 
         def work():
             try:
-                info = self.ctrl.open_wb_browser()
-                text = ("Браузер WB открыт. Дождись загрузки Wildberries и, если "
-                        "появится проверка, пройди её именно в этом окне. Затем "
-                        "нажми «Проверить соединение WB». Окно не закрывай во "
-                        f"время охоты. URL: {info.get('url') or ''}")
+                info = self.ctrl.open_marketplace_browser(marketplace)
+                text = (f"Браузер {label} открыт. Дождись загрузки {site} и, если "
+                        "появится проверка, пройди её именно в этом окне. Для Ozon "
+                        "при необходимости выбери город доставки. Вход в аккаунт "
+                        f"не нужен. Затем нажми «Проверить {site}». Общее окно "
+                        f"Price Hunter не закрывай во время охоты. "
+                        f"URL: {info.get('url') or ''}")
                 self.root.after(0, lambda: (
-                    self.var_wb_diag.set(text),
-                    messagebox.showinfo("Браузер WB", text)))
+                    diag_var.set(text) if diag_var is not None else None,
+                    messagebox.showinfo(f"Браузер {label}", text)))
             except Exception as e:
-                text = f"Не удалось открыть браузер WB: {e}"
+                text = f"Не удалось открыть браузер {label}: {e}"
                 self.root.after(0, lambda: (
-                    self.var_wb_diag.set(text),
-                    messagebox.showwarning("Браузер WB", text)))
+                    diag_var.set(text) if diag_var is not None else None,
+                    messagebox.showwarning(f"Браузер {label}", text)))
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _diagnose_wb(self, save_first: bool = False):
+    def _open_wb_browser(self, save_first: bool = False):
+        self._open_marketplace_browser("wb", save_first=save_first)
+
+    def _open_ozon_browser(self, save_first: bool = False):
+        self._open_marketplace_browser("ozon", save_first=save_first)
+
+    def _diagnose_marketplace(self, marketplace: str,
+                              save_first: bool = False):
         if save_first and not self._save_settings():
             return
-        self.var_wb_diag.set("Проверяю WB: пробую endpoint'ы, httpx, curl_cffi и при необходимости настоящий Chrome/Edge…")
-        self.var_wb_warn.set("Проверяю соединение с WB…")
+        marketplace = marketplace if marketplace in MARKETPLACE_LABELS else "wb"
+        label = _marketplace_label(marketplace)
+        diag_var = getattr(self, "var_mp_diag", getattr(self, "var_wb_diag", None))
+        if diag_var is not None:
+            diag_var.set(
+                f"Проверяю {label}: пробую API/endpoint'ы, httpx, curl_cffi и "
+                "при необходимости настоящий Chrome/Edge и отрисованный DOM…")
+        self.var_wb_warn.set(f"Проверяю соединение с {label}…")
 
         def work():
-            res = self.ctrl.diagnose_wb()
+            res = self.ctrl.diagnose_marketplace(marketplace)
             self.root.after(0, lambda: self._apply_diagnosis(res))
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _diagnose_wb(self, save_first: bool = False):
+        self._diagnose_marketplace("wb", save_first=save_first)
+
+    def _diagnose_ozon(self, save_first: bool = False):
+        self._diagnose_marketplace("ozon", save_first=save_first)
+
     def _apply_diagnosis(self, res: dict):
+        marketplace = _marketplace_of(res)
+        label = _marketplace_label(marketplace)
         lines = [str(res.get("message") or "")]
         if res.get("sample"):
             lines.append(f"Пример товара: {res['sample']}")
-        if res.get("ok") and res.get("card_ok") is False:
-            lines.append("Поиск работает, но проверка карточки товара не прошла.")
+        if marketplace == "wb" and res.get("ok") and res.get("card_ok") is False:
+            lines.append("Поиск работает, но проверка карточки WB не прошла. "
+                         "Для поиска это некритично.")
+        if res.get("enabled") is False:
+            lines.append(
+                f"ВАЖНО: {label} сейчас выключен в настройках. Проверка "
+                "выполнена отдельно, но в сканирование источник не войдёт, "
+                "пока не включишь его и не сохранишь настройки.")
         if res.get("requested_mode") == "demo":
             lines.append("ВАЖНО: сейчас выбран режим DEMO — настоящие товары "
                          "не ищутся. Переключи режим на live или auto и сохрани.")
-        elif res.get("effective_mode") == "live" and res.get("ok"):
-            lines.append("Режим LIVE активен. Если находок пока нет — это "
-                         "нормально: товары уже пишутся в базу, алерт будет "
-                         "только на аномальное падение цены.")
+        elif res.get("ok"):
+            lines.append(
+                f"Источник {label} работает. Если находок пока нет — это "
+                "нормально: товары уже пишутся в базу, алерт будет только на "
+                "аномальное падение цены. Для Ozon собственная история базы "
+                "накапливается с первых сканирований.")
         if res.get("hint"):
             lines.append(str(res["hint"]))
         attempts = res.get("attempts") or []
@@ -502,11 +608,13 @@ class PriceHunterApp:
                             + (f" HTTP {a['status']}" if a.get("status") else ""))
             lines.append("Попытки: " + "; ".join(tail))
         text = "\n".join(line for line in lines if line)
-        self.var_wb_diag.set(text)
+        diag_var = getattr(self, "var_mp_diag", getattr(self, "var_wb_diag", None))
+        if diag_var is not None:
+            diag_var.set(text)
         if res.get("ok"):
-            messagebox.showinfo("Проверка WB", text)
+            messagebox.showinfo(f"Проверка {label}", text)
         else:
-            messagebox.showwarning("Проверка WB", text)
+            messagebox.showwarning(f"Проверка {label}", text)
         self._poll(once=True)
 
     def _selected_alert(self) -> dict | None:
@@ -522,9 +630,12 @@ class PriceHunterApp:
         if a.get("drop_vs_median_pct") and a.get("hist_median"):
             extra = (f" | на {a['drop_vs_median_pct']:.0f}% ниже медианы истории "
                      f"({fmt_rub(a['hist_median'])})")
+        marketplace = _marketplace_of(a)
         self.var_details.set(
-            f"Арт. {a['nm']} | скор {a['score']}/100{extra} | {reasons} | "
-            f"{'DEMO' if a.get('source') == 'demo' else 'LIVE WB'}"
+            f"{_marketplace_label(marketplace)} | "
+            f"{MARKETPLACE_ID_LABELS[marketplace]} {a['nm']} | "
+            f"скор {a['score']}/100{extra} | {reasons} | "
+            f"{'DEMO' if a.get('source') == 'demo' else 'LIVE'}"
             f"{' | отправлено в Telegram' if a.get('telegram_sent') else ''}")
 
     def _open_selected(self):
@@ -548,9 +659,12 @@ class PriceHunterApp:
         a = self._selected_alert()
         if not a:
             return
-        hist = self.ctrl.product_history(a["nm"])
+        marketplace = _marketplace_of(a)
+        hist = self.ctrl.product_history(a["nm"], marketplace=marketplace)
         win = tk.Toplevel(self.root)
-        win.title(f"История цены — арт. {a['nm']}")
+        win.title(
+            f"История цены — {_marketplace_label(marketplace)} · "
+            f"{MARKETPLACE_ID_LABELS[marketplace]} {a['nm']}")
         win.geometry("660x340")
         win.configure(bg=BG)
         tk.Label(win, text=f"{a.get('brand','')} {a.get('name','')}"[:70], bg=BG,
@@ -590,7 +704,8 @@ class PriceHunterApp:
             self._alert_by_iid[iid] = a
             self.tree.insert("", "end", iid=iid, tags=(a["level"],), values=(
                 _fmt_ts(a["ts"]), LEVEL_ICON.get(a["level"], a["level"]),
-                f"{a.get('brand','')} {a.get('name','')}"[:64],
+                _marketplace_label(a),
+                f"{a.get('brand','')} {a.get('name','')}".strip()[:64],
                 fmt_rub(a["sale_price"]), fmt_rub(a["price"]),
                 f"−{a['discount_pct']:.0f}%", fmt_rub(a["saving"]), a["score"]))
         self.lb_recent.delete(0, "end")
@@ -598,8 +713,9 @@ class PriceHunterApp:
         for a in alerts[:12]:
             self._recent_urls.append(a["url"])
             self.lb_recent.insert("end",
-                f"{LEVEL_ICON.get(a['level'],'')}  {a.get('brand','')} "
-                f"{a.get('name','')[:42]} — {fmt_rub(a['sale_price'])} "
+                f"{_marketplace_label(a)} · {LEVEL_ICON.get(a['level'],'')}  "
+                f"{a.get('brand','')} {a.get('name','')[:42]} — "
+                f"{fmt_rub(a['sale_price'])} "
                 f"(было {fmt_rub(a['price'])}, −{a['discount_pct']:.0f}%)")
 
     def _refresh_runs(self):
@@ -613,7 +729,8 @@ class PriceHunterApp:
         self.tree_runs.delete(*self.tree_runs.get_children())
         for r in runs:
             self.tree_runs.insert("", "end", values=(
-                _fmt_ts(r["ts"]), r["source"], r["queries"], r["scanned"],
+                _fmt_ts(r["ts"]), _run_source_label(r["source"]),
+                r["queries"], r["scanned"],
                 r["new_products"], r["alerts"], (r["error"] or "—")[:70]))
 
     def _poll(self, once: bool = False):
@@ -630,14 +747,27 @@ class PriceHunterApp:
         st = self.ctrl.status()
         mode = st.get("effective_mode") or "…"
         requested = st.get("requested_mode") or st.get("mode")
+        markets = st.get("marketplaces") or {}
+        enabled_markets = [m for m in ("wb", "ozon")
+                           if (markets.get(m) or {}).get("enabled", True)]
+        available_markets = [m for m in enabled_markets
+                             if (markets.get(m) or {}).get("available") is True]
+        unavailable_markets = [m for m in enabled_markets
+                               if (markets.get(m) or {}).get("available") is False]
+        enabled_txt = " + ".join(_marketplace_label(m) for m in enabled_markets)
         if mode == "live":
-            badge = "● LIVE WB"
+            badge = "● LIVE " + (
+                " + ".join(_marketplace_label(m) for m in available_markets)
+                if available_markets else enabled_txt)
+            if unavailable_markets and available_markets:
+                badge += " · нет: " + ", ".join(
+                    _marketplace_label(m) for m in unavailable_markets)
         elif requested == "demo":
             badge = "● DEMO (вручную)"
         elif mode == "demo":
-            badge = "● DEMO • WB недоступен"
+            badge = "● DEMO • " + (enabled_txt or "WB + Ozon") + " недоступны"
         else:
-            badge = "● ПРОВЕРКА WB…"
+            badge = "● ПРОВЕРКА МАРКЕТПЛЕЙСОВ…"
         self.badge_mode.configure(
             text=badge, fg=GREEN if mode == "live" else AMBER)
         if st["scanning"]:
@@ -666,9 +796,12 @@ class PriceHunterApp:
                       "не найден")
         self.var_status.set(
             f"Режим: запрошен {requested}, фактически {mode} · "
+            f"источники: {enabled_txt or '—'} · "
+            f"товаров WB/Ozon: {s.get('products_wb', 0)}/{s.get('products_ozon', 0)} · "
             f"запросов: {len(pub.get('queries') or [])} · "
             f"интервал: {pub.get('interval_sec')} с · "
             f"транспорт WB: {st.get('wb_transport', 'auto')} · "
+            f"транспорт Ozon: {st.get('ozon_transport', 'auto')} · "
             f"Chrome/Edge: {chrome_txt} · "
             f"последнее сканирование: {_fmt_ts(st.get('last_scan_ts'))} · "
             f"Telegram: {'настроен' if tg_ok else 'НЕ настроен'}"
@@ -678,24 +811,25 @@ class PriceHunterApp:
                              "Вкладка «Настройки» → токен @BotFather + chat_id.")
         reason = str(st.get("mode_reason") or "")
         if requested == "demo":
-            wb_warn = ("⚠ Сейчас включён DEMO вручную: настоящие товары WB НЕ ищутся, "
+            wb_warn = ("⚠ Сейчас включён DEMO вручную: настоящие товары WB/Ozon НЕ ищутся, "
                        "находки сгенерированы. Для охоты: Настройки → Режим → live "
-                       "(или auto) → Сохранить и проверить WB.")
+                       "(или auto) → сохрани и проверь включённые маркетплейсы.")
         elif mode == "demo":
             nxt = st.get("next_live_probe_ts")
             retry = (f" Повторная проверка LIVE примерно через "
                      f"{max(0, int(nxt) - int(time.time()))} с."
                      if nxt else "")
-            wb_warn = ("⚠ WB сейчас недоступен, приложение временно в DEMO и "
-                       f"настоящие товары не ищет. Причина: {reason}{retry} "
-                       "Нажми «Проверить соединение WB».")
+            wb_warn = ("⚠ Все включённые живые источники сейчас недоступны, приложение "
+                       "временно в DEMO и настоящие товары не ищет. Причина: "
+                       f"{reason}{retry} Проверь WB и Ozon кнопками выше.")
         elif mode == "live" and st.get("last_error"):
-            wb_warn = (f"⚠ LIVE включён, но WB отвечает с ошибками: "
-                       f"{st['last_error'][:180]} Нажми «Проверить соединение WB».")
+            wb_warn = (f"⚠ LIVE работает частично: один или несколько запросов/источников "
+                       f"дали ошибку: {st['last_error'][:180]} "
+                       "Успешные товары другого источника при этом сохраняются.")
         elif mode == "live":
             wb_warn = ""
         else:
-            wb_warn = "Проверяю доступность WB…"
+            wb_warn = "Проверяю доступность включённых маркетплейсов…"
         self.var_wb_warn.set(wb_warn)
 
         self._refresh_alerts()
@@ -707,7 +841,8 @@ class PriceHunterApp:
 
     # ------------------------------ notifications --------------------- #
     def _notify_alert(self, a: dict):
-        title = f"Price Hunter: {LEVEL_ICON.get(a['level'], a['level'])}"
+        title = (f"Price Hunter · {_marketplace_label(a)}: "
+                 f"{LEVEL_ICON.get(a['level'], a['level'])}")
         msg = (f"{a.get('brand','')} {a.get('name','')[:50]} — {fmt_rub(a['sale_price_rub'])} "
                f"вместо {fmt_rub(a['price_rub'])} (−{a['discount_pct']:.0f}%)")
         self.tray.notify(title, msg)

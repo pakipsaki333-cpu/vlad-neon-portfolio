@@ -1,4 +1,4 @@
-"""Price Hunter — WB price-error scanner with Telegram alerts.
+"""Price Hunter — WB/Ozon price-error scanner with Telegram alerts.
 
 Run:  uvicorn app.main:app --host 0.0.0.0 --port 8000
 UI:   http://127.0.0.1:8000
@@ -26,6 +26,15 @@ scanner = Scanner(db, settings)
 
 app = FastAPI(title="Price Hunter", version="1.0.0")
 STATIC = BASE_DIR / "static"
+_MARKETPLACES = ("wb", "ozon")
+
+
+def _marketplace_or_400(marketplace: str | None,
+                        default: str | None = None) -> str | None:
+    value = (marketplace or default or "").lower() or None
+    if value is not None and value not in _MARKETPLACES:
+        raise HTTPException(400, "marketplace должен быть wb или ozon")
+    return value
 
 
 @app.on_event("startup")
@@ -42,8 +51,10 @@ def status():
 
 
 @app.get("/api/alerts")
-def alerts(limit: int = 100):
-    return {"alerts": db.alerts(limit=min(limit, 500))}
+def alerts(limit: int = 100, marketplace: str | None = None):
+    return {"alerts": db.alerts(
+        limit=min(limit, 500),
+        marketplace=_marketplace_or_400(marketplace))}
 
 
 @app.post("/api/alerts/{alert_id}/dismiss")
@@ -53,13 +64,24 @@ def dismiss(alert_id: int):
 
 
 @app.get("/api/products")
-def products(limit: int = 100):
-    return {"products": db.products(limit=min(limit, 500))}
+def products(limit: int = 100, marketplace: str | None = None):
+    return {"products": db.products(
+        limit=min(limit, 500),
+        marketplace=_marketplace_or_400(marketplace))}
 
 
 @app.get("/api/product/{nm}/history")
-def history(nm: int):
-    return {"nm": nm, "history": db.product_history(nm)}
+def history(nm: int, marketplace: str = "wb"):
+    selected = _marketplace_or_400(marketplace, "wb")
+    return {"nm": nm, "marketplace": selected,
+            "history": db.product_history(nm, marketplace=selected)}
+
+
+@app.get("/api/product/{marketplace}/{nm}/history")
+def history_by_marketplace(marketplace: str, nm: int):
+    selected = _marketplace_or_400(marketplace)
+    return {"nm": nm, "marketplace": selected,
+            "history": db.product_history(nm, marketplace=selected)}
 
 
 @app.get("/api/runs")
@@ -85,8 +107,25 @@ def scan_now():
 
 @app.post("/api/wb/diagnose")
 def wb_diagnose():
-    """Connectivity verdict: outcome/message/hint + per-endpoint attempts."""
-    return scanner.diagnose()
+    """WB connectivity verdict: outcome/message/hint + attempts."""
+    return scanner.diagnose_wb()
+
+
+@app.post("/api/ozon/diagnose")
+def ozon_diagnose():
+    """Ozon connectivity verdict: outcome/message/hint + attempts."""
+    return scanner.diagnose_ozon()
+
+
+@app.post("/api/marketplaces/diagnose")
+def marketplaces_diagnose():
+    """Check every enabled marketplace independently."""
+    return scanner.diagnose_all()
+
+
+@app.post("/api/diagnose/{marketplace}")
+def marketplace_diagnose(marketplace: str):
+    return scanner.diagnose(marketplace=_marketplace_or_400(marketplace))
 
 
 @app.get("/api/settings")
@@ -101,7 +140,7 @@ async def post_settings(req: Request):
     if patch.get("telegram_token") in ("", None) and settings.get()["telegram_token"]:
         patch.pop("telegram_token", None)
     updated = settings.update(patch)
-    scanner.reset_mode()  # mode/dest/transport may have changed
+    scanner.reset_mode()  # mode/marketplaces/transports may have changed
     return settings.public()
 
 

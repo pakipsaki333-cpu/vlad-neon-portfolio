@@ -19,15 +19,31 @@ log = logging.getLogger("telegram")
 _LEVEL_ICON = {"FIRE": "🔥🔥 ЦЕНОВАЯ ОШИБКА", "HOT": "🔥 РЕЗКОЕ ПАДЕНИЕ",
                "WATCH": "👀 Подозрительно дёшево"}
 
+_MARKETPLACE = {
+    "wb": ("🟣 Wildberries", "Артикул WB"),
+    "ozon": ("🔵 Ozon", "SKU Ozon"),
+}
+
+
+def _marketplace_of(a: dict) -> tuple[str, str]:
+    marketplace = str(a.get("marketplace") or "").lower()
+    if marketplace not in _MARKETPLACE:
+        marketplace = "ozon" if "ozon." in str(a.get("url") or "") else "wb"
+    return _MARKETPLACE[marketplace]
+
 
 def fmt_rub(v: float) -> str:
     return f"{v:,.0f}".replace(",", " ") + " ₽"
 
 
 def alert_text(a: dict) -> str:
+    marketplace_label, id_label = _marketplace_of(a)
+    title = f"{html.escape(a['brand'])} — {html.escape(a['name'])}" \
+        if a.get("brand") else html.escape(a["name"])
     lines = [
         f"<b>{_LEVEL_ICON.get(a['level'], a['level'])}</b>  ·  скор {a['score']}/100",
-        f"<b>{html.escape(a['brand'])} — {html.escape(a['name'])}</b>",
+        f"🏪 <b>{marketplace_label}</b>",
+        f"<b>{title}</b>",
         "",
         f"💰 <b>{fmt_rub(a['sale_price_rub'])}</b> вместо "
         f"<s>{fmt_rub(a['price_rub'])}</s>  (<b>−{a['discount_pct']:.0f}%</b>)",
@@ -42,7 +58,7 @@ def alert_text(a: dict) -> str:
         lines += [f"• {html.escape(r)}" for r in a["reasons"]]
     lines += [
         "",
-        f"Артикул: <code>{a['nm']}</code>",
+        f"{id_label}: <code>{a.get('sku') or a['nm']}</code>",
         f"🛒 <a href=\"{a['url']}\">ОТКРЫТЬ И КУПИТЬ</a>",
         "⏱ Такие цены живут минуты. Действуй быстро, но проверь "
         "продавца и размер/комплектацию.",
@@ -92,6 +108,6 @@ class TelegramNotifier:
         return self._post("sendMessage", {
             "chat_id": self.chat_id, "parse_mode": "HTML",
             "text": "✅ <b>Price Hunter на связи.</b>\n"
-                    "Сюда будут падать ценовые ошибки WB. "
+                    "Сюда будут падать ценовые ошибки Wildberries и Ozon. "
                     "Держи телефон под рукой — такие цены живут минуты.",
         })

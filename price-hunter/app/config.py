@@ -36,9 +36,14 @@ DEFAULTS: dict = {
     "verify_with_price_history": True,
     "dest": -1257786,                  # WB geo: Moscow. Change to your region.
     "spp": 30,
+    "wb_enabled": True,
+    "ozon_enabled": True,
     # auto = httpx -> curl_cffi -> installed real Chrome/Edge (CDP/DOM)
     "wb_transport": "auto",
     "wb_request_delay_sec": 1.2,
+    "ozon_transport": "auto",
+    "ozon_request_delay_sec": 3.0,
+    "ozon_browser_fallback": True,
     "live_probe_interval_sec": 300,
     "wb_browser_fallback": True,
     "wb_browser_path": "",             # optional explicit chrome.exe/msedge.exe
@@ -127,6 +132,26 @@ class Settings:
                 120, max(5, int(self._data.get("wb_browser_wait_sec", 25))))
         except Exception:
             self._data["wb_browser_wait_sec"] = 25
+
+        self._data["wb_enabled"] = bool(self._data.get("wb_enabled", True))
+        self._data["ozon_enabled"] = bool(self._data.get("ozon_enabled", True))
+        if not self._data["wb_enabled"] and not self._data["ozon_enabled"]:
+            # A live scanner with no marketplace can only look broken.
+            self._data["wb_enabled"] = True
+        ozon_transport = str(self._data.get("ozon_transport", "auto")).lower()
+        ozon_transport = {"curl": "browser", "dom": "chrome", "cdp": "chrome",
+                          "edge": "chrome", "chromium": "chrome"}.get(
+                              ozon_transport, ozon_transport)
+        self._data["ozon_transport"] = ozon_transport if ozon_transport in (
+            "auto", "httpx", "browser", "curl_cffi", "chrome") else "auto"
+        try:
+            self._data["ozon_request_delay_sec"] = min(
+                10.0, max(1.0, float(
+                    self._data.get("ozon_request_delay_sec", 3.0))))
+        except Exception:
+            self._data["ozon_request_delay_sec"] = 3.0
+        self._data["ozon_browser_fallback"] = bool(
+            self._data.get("ozon_browser_fallback", True))
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         SETTINGS_FILE.write_text(
             json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -27,6 +27,9 @@ def form(**over):
         "min_score": "35", "alert_cooldown_hours": "6",
         "dest": "-1257786", "spp": "30",
         "wb_transport": "curl_cffi", "wb_request_delay_sec": "1.5",
+        "wb_enabled": True, "ozon_enabled": "true",
+        "ozon_transport": "dom", "ozon_request_delay_sec": "3.5",
+        "ozon_browser_fallback": "yes",
         "live_probe_interval_sec": "300", "wb_browser_fallback": True,
         "wb_browser_path": "  C:/Program Files/Google/Chrome/Application/chrome.exe  ",
         "wb_browser_port": "9229", "wb_browser_wait_sec": "999",
@@ -69,6 +72,19 @@ class ParseFormTest(unittest.TestCase):
         self.assertEqual(chrome["wb_browser_wait_sec"], 120)
         with self.assertRaises(ValueError):
             parse_settings_form(form(wb_transport="telepathy"), EXISTING)
+
+    def test_marketplaces_and_ozon_transport_normalized(self):
+        out = parse_settings_form(form(), EXISTING)
+        self.assertTrue(out["wb_enabled"])
+        self.assertTrue(out["ozon_enabled"])
+        self.assertEqual(out["ozon_transport"], "chrome")  # dom alias
+        self.assertEqual(out["ozon_request_delay_sec"], 3.5)
+        self.assertTrue(out["ozon_browser_fallback"])
+        with self.assertRaises(ValueError):
+            parse_settings_form(
+                form(wb_enabled=False, ozon_enabled=False), EXISTING)
+        with self.assertRaises(ValueError):
+            parse_settings_form(form(ozon_transport="telepathy"), EXISTING)
 
     def test_empty_queries_rejected(self):
         with self.assertRaises(ValueError):

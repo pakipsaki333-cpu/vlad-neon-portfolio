@@ -42,6 +42,23 @@ def _as_float(raw: Mapping[str, Any], key: str, label: str,
     return v
 
 
+def _as_bool(raw: Mapping[str, Any], key: str, default: bool) -> bool:
+    value = raw.get(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() not in ("", "0", "false", "no", "off", "нет")
+    return bool(value)
+
+
+def _transport(raw: Mapping[str, Any], key: str, label: str) -> str:
+    transport = str(raw.get(key, "auto")).strip().lower()
+    transport = {"curl_cffi": "browser", "curl": "browser",
+                 "dom": "chrome", "cdp": "chrome", "edge": "chrome",
+                 "chromium": "chrome"}.get(transport, transport)
+    if transport not in ("auto", "httpx", "browser", "chrome"):
+        raise ValueError(f"{label}: выбери auto, chrome, browser или httpx")
+    return transport
+
+
 def parse_settings_form(raw: Mapping[str, Any], existing: dict) -> dict:
     """Validate/normalize values coming from the settings form.
 
@@ -82,16 +99,21 @@ def parse_settings_form(raw: Mapping[str, Any], existing: dict) -> dict:
     out["dest"] = _as_int(raw, "dest", "Регион WB (dest)")
     out["spp"] = _as_int(raw, "spp", "СПП, %", 0, 100)
 
-    transport = str(raw.get("wb_transport", "auto")).strip().lower()
-    transport = {"curl_cffi": "browser", "curl": "browser",
-                 "dom": "chrome", "cdp": "chrome", "edge": "chrome",
-                 "chromium": "chrome"}.get(transport, transport)
-    if transport not in ("auto", "httpx", "browser", "chrome"):
-        raise ValueError("Транспорт WB: выбери auto, chrome, browser или httpx")
-    out["wb_transport"] = transport
+    out["wb_enabled"] = _as_bool(raw, "wb_enabled", True)
+    out["ozon_enabled"] = _as_bool(raw, "ozon_enabled", True)
+    if not out["wb_enabled"] and not out["ozon_enabled"]:
+        raise ValueError("Маркетплейсы: включи хотя бы WB или Ozon")
+
+    out["wb_transport"] = _transport(raw, "wb_transport", "Транспорт WB")
     if raw.get("wb_request_delay_sec") not in (None, ""):
         out["wb_request_delay_sec"] = _as_float(
-            raw, "wb_request_delay_sec", "Пауза между запросами, сек", 0.5, 10)
+            raw, "wb_request_delay_sec", "Пауза WB, сек", 0.5, 10)
+    out["ozon_transport"] = _transport(raw, "ozon_transport", "Транспорт Ozon")
+    if raw.get("ozon_request_delay_sec") not in (None, ""):
+        out["ozon_request_delay_sec"] = _as_float(
+            raw, "ozon_request_delay_sec", "Пауза Ozon, сек", 1.0, 10)
+    out["ozon_browser_fallback"] = _as_bool(
+        raw, "ozon_browser_fallback", True)
     if raw.get("live_probe_interval_sec") not in (None, ""):
         out["live_probe_interval_sec"] = _as_int(
             raw, "live_probe_interval_sec", "Повторная проверка LIVE, сек",
@@ -101,7 +123,7 @@ def parse_settings_form(raw: Mapping[str, Any], existing: dict) -> dict:
     out["wb_browser_headless"] = bool(raw.get("wb_browser_headless", False))
     if raw.get("wb_browser_port") not in (None, ""):
         out["wb_browser_port"] = _as_int(
-            raw, "wb_browser_port", "Порт браузера WB", 1024, 65535)
+            raw, "wb_browser_port", "Порт браузера", 1024, 65535)
     if raw.get("wb_browser_wait_sec") not in (None, ""):
         out["wb_browser_wait_sec"] = _as_int(
             raw, "wb_browser_wait_sec", "Ожидание браузера, сек", 5, 120)
@@ -154,8 +176,9 @@ class DesktopController:
         return {**self.scanner.status(), "stats": self.db.stats(),
                 "settings": self.settings.public()}
 
-    def alerts(self, limit: int = 200) -> list[dict]:
-        return self.db.alerts(limit=limit)
+    def alerts(self, limit: int = 200,
+               marketplace: str | None = None) -> list[dict]:
+        return self.db.alerts(limit=limit, marketplace=marketplace)
 
     def runs(self, limit: int = 50) -> list[dict]:
         return self.db.runs(limit=limit)
@@ -163,8 +186,8 @@ class DesktopController:
     def dismiss(self, alert_id: int) -> None:
         self.db.dismiss_alert(alert_id)
 
-    def product_history(self, nm: int) -> list[dict]:
-        return self.db.product_history(nm)
+    def product_history(self, nm: int, marketplace: str = "wb") -> list[dict]:
+        return self.db.product_history(nm, marketplace=marketplace)
 
     def drain_alerts(self) -> list[dict]:
         out = []
@@ -178,19 +201,34 @@ class DesktopController:
     def save_settings(self, raw: Mapping[str, Any]) -> dict:
         parsed = parse_settings_form(raw, self.settings.get())
         self.settings.update(parsed)
-        # Mode/dest/transport may have changed: re-probe WB on next scan.
+        # Mode/marketplaces/transports may have changed: re-probe on scan.
         self.scanner.reset_mode()
         return self.settings.public()
 
+    def diagnose_marketplace(self, marketplace: str,
+                             query: str | None = None) -> dict:
+        """Run one marketplace connectivity check and return its verdict."""
+        return self.scanner.diagnose(query, marketplace=marketplace)
+
     def diagnose_wb(self, query: str | None = None) -> dict:
-        """Run the WB connectivity check and return its full verdict
-        (ok/outcome/message/hint/attempts) for display in the UI."""
-        return self.scanner.diagnose(query)
+        return self.diagnose_marketplace("wb", query)
+
+    def diagnose_ozon(self, query: str | None = None) -> dict:
+        return self.diagnose_marketplace("ozon", query)
+
+    def diagnose_all(self, query: str | None = None) -> dict:
+        return self.scanner.diagnose_all(query)
+
+    def open_marketplace_browser(self, marketplace: str = "wb") -> dict:
+        """Open the shared dedicated Chrome/Edge on a marketplace home so
+        the user can finish any browser check there before diagnostics."""
+        return self.scanner.open_browser(marketplace)
 
     def open_wb_browser(self) -> dict:
-        """Open the dedicated Chrome/Edge window so the user can let WB
-        finish its browser check there before rerunning diagnostics."""
-        return self.scanner.open_browser()
+        return self.open_marketplace_browser("wb")
+
+    def open_ozon_browser(self) -> dict:
+        return self.open_marketplace_browser("ozon")
 
     def telegram_test(self, token: str | None = None,
                       chat_id: str | None = None) -> tuple[bool, str]:
