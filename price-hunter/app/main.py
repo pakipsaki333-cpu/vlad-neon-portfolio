@@ -51,10 +51,12 @@ def status():
 
 
 @app.get("/api/alerts")
-def alerts(limit: int = 100, marketplace: str | None = None):
+def alerts(limit: int = 100, marketplace: str | None = None,
+           history_confirmed: bool = False):
     return {"alerts": db.alerts(
         limit=min(limit, 500),
-        marketplace=_marketplace_or_400(marketplace))}
+        marketplace=_marketplace_or_400(marketplace),
+        only_history_confirmed=history_confirmed)}
 
 
 @app.post("/api/alerts/{alert_id}/dismiss")

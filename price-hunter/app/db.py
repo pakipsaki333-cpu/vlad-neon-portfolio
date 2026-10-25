@@ -53,6 +53,16 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 """
 
+# An alert is history-confirmed only when it carries both a positive
+# history median and a positive drop from that median.  Alerts created
+# by the old sticker-discount detector deliberately do not match: they
+# remain available as historical rows, but the history-only UI can keep
+# them out of the current "finds" and KPI numbers.
+HISTORY_CONFIRMED_SQL = (
+    "(hist_median IS NOT NULL AND hist_median > 0 "
+    "AND drop_vs_median_pct IS NOT NULL AND drop_vs_median_pct > 0)"
+)
+
 
 class DB:
     def __init__(self, path: str | Path):
@@ -285,7 +295,8 @@ class DB:
             self._conn.commit()
 
     def alerts(self, limit: int = 100, include_dismissed: bool = False,
-               marketplace: str | None = None) -> list[dict]:
+               marketplace: str | None = None,
+               only_history_confirmed: bool = False) -> list[dict]:
         q = "SELECT * FROM alerts"
         conditions = []
         args: list[Any] = []
@@ -294,6 +305,8 @@ class DB:
         if marketplace in ("wb", "ozon"):
             conditions.append("marketplace=?")
             args.append(marketplace)
+        if only_history_confirmed:
+            conditions.append(HISTORY_CONFIRMED_SQL)
         if conditions:
             q += " WHERE " + " AND ".join(conditions)
         q += " ORDER BY ts DESC LIMIT ?"
@@ -304,6 +317,9 @@ class DB:
         for r in rows:
             d = dict(r)
             d["reasons"] = json.loads(d.get("reasons") or "[]")
+            d["history_confirmed"] = bool(
+                (d.get("hist_median") or 0) > 0
+                and (d.get("drop_vs_median_pct") or 0) > 0)
             d.pop("raw", None)
             out.append(d)
         return out
@@ -359,14 +375,36 @@ class DB:
                 "alerts_today_ozon": one(
                     "SELECT COUNT(*) FROM alerts WHERE dismissed=0 "
                     "AND marketplace='ozon' AND ts>=?", day_ago),
+                "alerts_today_history_confirmed": one(
+                    "SELECT COUNT(*) FROM alerts WHERE dismissed=0 "
+                    f"AND ts>=? AND {HISTORY_CONFIRMED_SQL}", day_ago),
+                "alerts_today_history_confirmed_wb": one(
+                    "SELECT COUNT(*) FROM alerts WHERE dismissed=0 "
+                    "AND marketplace='wb' AND ts>=? "
+                    f"AND {HISTORY_CONFIRMED_SQL}", day_ago),
+                "alerts_today_history_confirmed_ozon": one(
+                    "SELECT COUNT(*) FROM alerts WHERE dismissed=0 "
+                    "AND marketplace='ozon' AND ts>=? "
+                    f"AND {HISTORY_CONFIRMED_SQL}", day_ago),
+                "alerts_today_unconfirmed": one(
+                    "SELECT COUNT(*) FROM alerts WHERE dismissed=0 "
+                    f"AND ts>=? AND NOT {HISTORY_CONFIRMED_SQL}", day_ago),
+                "alerts_unconfirmed_total": one(
+                    "SELECT COUNT(*) FROM alerts WHERE dismissed=0 "
+                    f"AND NOT {HISTORY_CONFIRMED_SQL}"),
                 "best_discount_today": one(
-                    "SELECT COALESCE(MAX(discount_pct),0) FROM alerts WHERE ts>=?",
-                    day_ago),
+                    "SELECT COALESCE(MAX(discount_pct),0) FROM alerts "
+                    "WHERE dismissed=0 AND ts>=?", day_ago),
                 "best_history_drop_today": one(
                     "SELECT COALESCE(MAX(drop_vs_median_pct),0) "
-                    "FROM alerts WHERE ts>=?", day_ago),
+                    "FROM alerts WHERE dismissed=0 AND ts>=?", day_ago),
                 "potential_saving_today": one(
-                    "SELECT COALESCE(SUM(saving),0) FROM alerts WHERE ts>=?", day_ago),
+                    "SELECT COALESCE(SUM(saving),0) FROM alerts "
+                    "WHERE dismissed=0 AND ts>=?", day_ago),
+                "potential_saving_history_today": one(
+                    "SELECT COALESCE(SUM(saving),0) FROM alerts "
+                    f"WHERE dismissed=0 AND ts>=? AND {HISTORY_CONFIRMED_SQL}",
+                    day_ago),
                 "scans_total": one("SELECT COUNT(*) FROM runs WHERE finished IS NOT NULL"),
             }
 

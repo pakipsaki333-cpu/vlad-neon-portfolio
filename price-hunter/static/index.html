@@ -56,9 +56,9 @@ canvas.hist{width:100%;height:120px;background:#0b0b1c;border-radius:10px;margin
  <div id="marketStatus" class="mut" style="margin:0 0 16px;line-height:1.6"></div>
  <div class="kpis">
   <div class="kpi"><small>Товаров в базе</small><b id="kProducts">—</b><div class="mut" id="kProductsDetail"></div></div>
-  <div class="kpi"><small>Находок за 24ч</small><b id="kAlerts">—</b><div class="mut" id="kAlertsDetail"></div></div>
+  <div class="kpi"><small id="kAlertsLabel">Находок за 24ч</small><b id="kAlerts">—</b><div class="mut" id="kAlertsDetail"></div></div>
   <div class="kpi"><small>Лучшее падение vs истории 24ч</small><b id="kBest">—</b></div>
-  <div class="kpi"><small>Потенциальная выгода 24ч</small><b id="kSaving">—</b></div>
+  <div class="kpi"><small id="kSavingLabel">Потенциальная выгода 24ч</small><b id="kSaving">—</b></div>
   <div class="kpi"><small>Сканирований</small><b id="kScans">—</b></div>
   <div class="kpi"><small>Снапшотов цен</small><b id="kSnaps">—</b></div>
  </div>
@@ -135,12 +135,12 @@ async function refresh(){
   $('marketStatus').textContent='Источники: '+enabled.map(m=>{const x=markets[m]||{};const state=x.available===true?'✓ доступен':x.available===false?'✗ недоступен':'— ещё не проверен';return marketLabel(m)+' '+state+' · транспорт '+(x.transport||'auto')+' · товаров за проход '+(x.last_products||0)}).join('  |  ')+(st.mode_reason?'  ·  '+st.mode_reason:'');
   $('runState').innerHTML=`<span class="dot ${running?'':'off'}"></span>${st.scanning?'сканирую…':running?(st.next_scan_ts?('след. проход через '+Math.max(0,st.next_scan_ts-Math.floor(Date.now()/1000))+' с'):'работает'):'на паузе'}`;
   $('btnToggle').textContent=running?'⏸ Пауза':'▶️ Запуск';
-  const s=st.stats; $('kProducts').textContent=s.products_seen;$('kProductsDetail').textContent='WB '+(s.products_wb||0)+' · Ozon '+(s.products_ozon||0);$('kAlerts').textContent=s.alerts_today;$('kAlertsDetail').textContent='WB '+(s.alerts_today_wb||0)+' · Ozon '+(s.alerts_today_ozon||0);$('kBest').textContent='−'+Math.round(s.best_history_drop_today||0)+'%';$('kSaving').textContent=fmt(s.potential_saving_today);$('kScans').textContent=s.scans_total;$('kSnaps').textContent=s.snapshots;
-  const {alerts}=await j('/api/alerts?limit=60');
+  const s=st.stats, historyOnly=(st.settings||{}).history_only!==false; $('kProducts').textContent=s.products_seen;$('kProductsDetail').textContent='WB '+(s.products_wb||0)+' · Ozon '+(s.products_ozon||0);$('kAlertsLabel').textContent=historyOnly?'Подтверждено историей 24ч':'Находок за 24ч';$('kSavingLabel').textContent=historyOnly?'Выгода vs истории 24ч':'Потенциальная выгода 24ч';$('kAlerts').textContent=historyOnly?(s.alerts_today_history_confirmed||0):s.alerts_today;$('kAlertsDetail').textContent=historyOnly?('WB '+(s.alerts_today_history_confirmed_wb||0)+' · Ozon '+(s.alerts_today_history_confirmed_ozon||0)+(s.alerts_unconfirmed_total?' · скрыто без истории '+(s.alerts_unconfirmed_total||0):'')):('WB '+(s.alerts_today_wb||0)+' · Ozon '+(s.alerts_today_ozon||0));$('kBest').textContent='−'+Math.round(s.best_history_drop_today||0)+'%';$('kSaving').textContent=fmt(historyOnly?(s.potential_saving_history_today||0):s.potential_saving_today);$('kScans').textContent=s.scans_total;$('kSnaps').textContent=s.snapshots;
+  const {alerts}=await j('/api/alerts?limit=60'+(historyOnly?'&history_confirmed=true':''));
   if(alerts.length&&alerts[0].id>lastTopId){if(lastTopId)beep();lastTopId=alerts[0].id}
   $('feed').innerHTML=alerts.length?alerts.map(a=>`<div class="card ${a.level}">
     ${photo(a)}
-    <div><div class="mut">${a.level==='FIRE'?'🔥🔥 ЦЕНОВАЯ ОШИБКА':a.level==='HOT'?'🔥 Резкое падение':'👀 Подозрительно дёшево'} · ${marketLabel(a)} · ${ago(a.ts)} · ${idLabel(a)} <a href="${esc(a.url)}" target="_blank" rel="noopener">${a.nm}</a> ${a.source==='demo'?'<span class="badge demo">DEMO</span>':''} ${a.telegram_sent?'✈️ отправлено':''}</div>
+    <div><div class="mut">${a.level==='FIRE'?'🔥🔥 ЦЕНОВАЯ ОШИБКА':a.level==='HOT'?'🔥 Резкое падение':'👀 Подозрительно дёшево'} · ${marketLabel(a)} · ${ago(a.ts)} · ${idLabel(a)} <a href="${esc(a.url)}" target="_blank" rel="noopener">${a.nm}</a> ${a.source==='demo'?'<span class="badge demo">DEMO</span>':''} ${(!a.hist_median||!a.drop_vs_median_pct)?'<span class="badge demo">БЕЗ ПОДТВЕРЖДЕНИЯ ИСТОРИЕЙ</span>':''} ${a.telegram_sent?'✈️ отправлено':''}</div>
     <div style="font-weight:800;margin:3px 0">${a.brand?esc(a.brand)+' — ':''}${esc(a.name||'')}</div>
     <div><span class="price">${fmt(a.sale_price)}</span><span class="old">${fmt(a.hist_median||a.price)}</span><span class="disc">−${Math.round(a.drop_vs_median_pct??a.discount_pct)}%</span></div>
     <div class="mut">Выгода ${fmt(a.saving)}${a.drop_vs_median_pct?` · на ${Math.round(a.drop_vs_median_pct)}% ниже медианы истории (${fmt(a.hist_median)})`:''}${a.hist_min?` · минимум площадки ${fmt(a.hist_min)}${a.vs_hist_min_pct>0?' · новый минимум':''}`:''} · скор ${a.score}/100</div>
@@ -149,7 +149,7 @@ async function refresh(){
     <div id="hist-${a.id}"></div></div>
     <div class="right"><a class="btn-buy" href="${esc(a.url)}" target="_blank" rel="noopener">🛒 КУПИТЬ</a>
     <button class="btn2" onclick="showHist(${a.nm},${a.id},'${market(a)}')">📉 История цены</button>
-    <button class="btn2" onclick="dismissA(${a.id})">Скрыть</button></div></div>`).join(''):$('feed').innerHTML;
+    <button class="btn2" onclick="dismissA(${a.id})">Скрыть</button></div></div>`).join(''):'<div class="mut">Находок для текущего фильтра пока нет. В режиме history-only старые находки только по скидке карточки скрыты.</div>';
   const {runs}=await j('/api/runs?limit=10');
   $('runs').innerHTML=runs.map(r=>`<tr><td>${new Date(r.ts*1000).toLocaleTimeString('ru-RU')}</td><td>${esc(runLabel(r.source))}</td><td>${r.queries}</td><td>${r.scanned}</td><td>${r.new_products}</td><td>${r.alerts}</td><td>${esc(r.error||'—')}</td></tr>`).join('');
   const {products}=await j('/api/products?limit=25');

@@ -178,8 +178,11 @@ class DesktopController:
                 "settings": self.settings.public()}
 
     def alerts(self, limit: int = 200,
-               marketplace: str | None = None) -> list[dict]:
-        return self.db.alerts(limit=limit, marketplace=marketplace)
+               marketplace: str | None = None,
+               only_history_confirmed: bool = False) -> list[dict]:
+        return self.db.alerts(
+            limit=limit, marketplace=marketplace,
+            only_history_confirmed=only_history_confirmed)
 
     def runs(self, limit: int = 50) -> list[dict]:
         return self.db.runs(limit=limit)

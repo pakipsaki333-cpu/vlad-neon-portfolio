@@ -65,9 +65,26 @@ def _alert_drop(alert: dict) -> float:
     return float(drop if drop is not None else alert.get("discount_pct") or 0)
 
 
+def _alert_history_confirmed(alert: dict) -> bool:
+    if "history_confirmed" in alert:
+        return bool(alert.get("history_confirmed"))
+    return bool((alert.get("hist_median") or 0) > 0
+                and (alert.get("drop_vs_median_pct") or 0) > 0)
+
+
+def _history_only_enabled(settings: dict | None) -> bool:
+    value = (settings or {}).get("history_only", True)
+    if isinstance(value, str):
+        return value.strip().lower() not in ("0", "false", "no", "off", "")
+    return bool(value)
+
+
 def _alert_reference_text(alert: dict) -> str:
+    confirmed = _alert_history_confirmed(alert)
     label = "медиана истории" if alert.get("hist_median") else "цена карточки"
     text = f"{label} {fmt_rub(_alert_reference(alert))}"
+    if not confirmed:
+        text += " · без подтверждения историей"
     if alert.get("hist_min"):
         text += f" · минимум площадки {fmt_rub(float(alert['hist_min']))}"
         vs_min = alert.get("vs_hist_min_pct")
@@ -83,8 +100,10 @@ class PriceHunterApp:
         self.tray = TrayIcon(icon_path)
         self._tray_on = self.tray.start()
         self._top_alert_id = -1
+        self._alert_filter_key: tuple[bool, bool] | None = None
         self._top_run_id = -1
         self._alert_by_iid: dict[str, dict] = {}
+        self.var_show_unconfirmed_alerts = tk.BooleanVar(value=False)
         self._toasts: list[tk.Toplevel] = []
         self._tray_hint_shown = False
         self._dialog_busy = False
@@ -170,18 +189,21 @@ class PriceHunterApp:
         kpis = ttk.Frame(f)
         kpis.pack(fill="x")
         self.kpi_vars = {}
+        self.kpi_label_vars = {}
         for key, label in [("products", "Товаров в базе"), ("alerts", "Находок за 24ч"),
                            ("best", "Лучшее падение vs истории 24ч"), ("saving", "Выгода за 24ч"),
                            ("scans", "Сканирований"), ("snaps", "Снапшотов цен")]:
             card = tk.Frame(kpis, bg=PANEL, padx=14, pady=10,
                             highlightbackground=LINE, highlightthickness=1)
             card.pack(side="left", fill="x", expand=True, padx=4)
-            tk.Label(card, text=label.upper(), bg=PANEL, fg=MUT,
+            label_var = tk.StringVar(value=label.upper())
+            tk.Label(card, textvariable=label_var, bg=PANEL, fg=MUT,
                      font=("Segoe UI", 8, "bold")).pack(anchor="w")
             var = tk.StringVar(value="—")
             tk.Label(card, textvariable=var, bg=PANEL, fg=TEXT,
                      font=("Segoe UI", 20, "bold")).pack(anchor="w")
             self.kpi_vars[key] = var
+            self.kpi_label_vars[key] = label_var
 
         self.var_status = tk.StringVar(value="")
         tk.Label(f, textvariable=self.var_status, bg=BG, fg=TEXT,
@@ -219,7 +241,9 @@ class PriceHunterApp:
         ttk.Button(market_actions, text="Открыть браузер Ozon",
                    command=lambda: self._open_ozon_browser()).pack(side="left", padx=4)
 
-        tk.Label(f, text="Последние находки (двойной клик — открыть товар):",
+        self.var_recent_title = tk.StringVar(
+            value="Последние находки (двойной клик — открыть товар):")
+        tk.Label(f, textvariable=self.var_recent_title,
                  bg=BG, fg=MUT, font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(10, 4))
         self.lb_recent = tk.Listbox(f, bg=PANEL, fg=TEXT, height=12, borderwidth=0,
                                     highlightthickness=1, highlightbackground=LINE,
@@ -231,6 +255,12 @@ class PriceHunterApp:
     # ------------------------------ Находки --------------------------- #
     def _build_finds(self):
         f = self._tab("Находки")
+        ttk.Checkbutton(
+            f,
+            text="Показывать старые находки без подтверждения историей (только скидка карточки)",
+            variable=self.var_show_unconfirmed_alerts,
+            command=lambda: self._refresh_alerts(force=True),
+        ).pack(anchor="w", pady=(0, 8))
         cols = ("time", "level", "marketplace", "name", "sale", "old",
                 "hist_min", "disc", "saving", "score")
         self.tree = ttk.Treeview(f, columns=cols, show="headings", height=18)
@@ -245,6 +275,7 @@ class PriceHunterApp:
             self.tree.column(col, width=w, anchor="w" if col == "name" else "center")
         self.tree.tag_configure("FIRE", foreground=PINK)
         self.tree.tag_configure("HOT", foreground=AMBER)
+        self.tree.tag_configure("unconfirmed", foreground=MUT)
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<<TreeviewSelect>>", self._on_select_alert)
         self.tree.bind("<Double-Button-1>", lambda e: self._open_selected())
@@ -686,6 +717,9 @@ class PriceHunterApp:
                           f"{fmt_rub(float(a['hist_min']))} на {float(vs_min):.0f}%")
             else:
                 extra += f" | минимум площадки {fmt_rub(float(a['hist_min']))}"
+        if not _alert_history_confirmed(a):
+            extra += (" | ⚠ не подтверждено историей: это старая/смешанная "
+                      "находка по скидке карточки, а не по падению от обычной цены")
         marketplace = _marketplace_of(a)
         self.var_details.set(
             f"{_marketplace_label(marketplace)} | "
@@ -748,17 +782,32 @@ class PriceHunterApp:
 
     # ------------------------------ polling --------------------------- #
     def _refresh_alerts(self, force: bool = False):
-        alerts = self.ctrl.alerts(200)
+        history_only = _history_only_enabled(self.ctrl.settings.get())
+        show_unconfirmed = bool(self.var_show_unconfirmed_alerts.get())
+        only_confirmed = history_only and not show_unconfirmed
+        filter_key = (history_only, show_unconfirmed)
+        if filter_key != self._alert_filter_key:
+            force = True
+            self._alert_filter_key = filter_key
+        alerts = self.ctrl.alerts(
+            200, only_history_confirmed=only_confirmed)
         top = alerts[0]["id"] if alerts else 0
         if not force and top == self._top_alert_id:
             return
         self._top_alert_id = top
+        self.var_recent_title.set(
+            "Последние находки, подтверждённые историей "
+            "(двойной клик — открыть товар):"
+            if only_confirmed else
+            "Последние находки (двойной клик — открыть товар):")
         self.tree.delete(*self.tree.get_children())
         self._alert_by_iid = {}
         for a in alerts:
             iid = str(a["id"])
             self._alert_by_iid[iid] = a
-            self.tree.insert("", "end", iid=iid, tags=(a["level"],), values=(
+            tags = (a["level"],) if _alert_history_confirmed(a) \
+                else (a["level"], "unconfirmed")
+            self.tree.insert("", "end", iid=iid, tags=tags, values=(
                 _fmt_ts(a["ts"]), LEVEL_ICON.get(a["level"], a["level"]),
                 _marketplace_label(a),
                 f"{a.get('brand','')} {a.get('name','')}".strip()[:64],
@@ -775,6 +824,11 @@ class PriceHunterApp:
                 f"{fmt_rub(a['sale_price'])} "
                 f"({_alert_reference_text(a)}, "
                 f"−{_alert_drop(a):.0f}%)")
+        if not alerts and only_confirmed:
+            self.var_details.set(
+                "Подтверждённых историей находок пока нет. Старые находки "
+                "только по скидке карточки скрыты — при необходимости "
+                "покажи их галочкой в верхней части вкладки «Находки».")
 
     def _refresh_runs(self):
         runs = self.ctrl.runs(50)
@@ -849,15 +903,26 @@ class PriceHunterApp:
         self.btn_toggle.configure(text="Пауза" if st["running"] else "▶ Запуск")
 
         s = st["stats"]
+        pub = st["settings"]
+        history_only = _history_only_enabled(pub)
         self.kpi_vars["products"].set(str(s["products_seen"]))
-        self.kpi_vars["alerts"].set(str(s["alerts_today"]))
+        if history_only:
+            self.kpi_label_vars["alerts"].set("ПОДТВЕРЖДЕНО ИСТОРИЕЙ 24Ч")
+            self.kpi_label_vars["saving"].set("ВЫГОДА VS ИСТОРИИ 24Ч")
+            alerts_kpi = s.get("alerts_today_history_confirmed", 0) or 0
+            saving_kpi = s.get("potential_saving_history_today", 0) or 0
+        else:
+            self.kpi_label_vars["alerts"].set("НАХОДОК ЗА 24Ч")
+            self.kpi_label_vars["saving"].set("ВЫГОДА ЗА 24Ч")
+            alerts_kpi = s.get("alerts_today", 0) or 0
+            saving_kpi = s.get("potential_saving_today", 0) or 0
+        self.kpi_vars["alerts"].set(str(alerts_kpi))
         best = s.get("best_history_drop_today", 0) or 0
         self.kpi_vars["best"].set(f"−{best:.0f}%")
-        self.kpi_vars["saving"].set(fmt_rub(s["potential_saving_today"]))
+        self.kpi_vars["saving"].set(fmt_rub(saving_kpi))
         self.kpi_vars["scans"].set(str(s["scans_total"]))
         self.kpi_vars["snaps"].set(str(s["snapshots"]))
 
-        pub = st["settings"]
         tg_ok = pub.get("telegram_configured") and pub.get("telegram_enabled")
         chrome = st.get("chrome_transport") or {}
         chrome_txt = ("найден" if chrome.get("available") else
@@ -869,8 +934,15 @@ class PriceHunterApp:
                if (markets.get(m) or {}).get("last_scan_ts")
                else "ещё не сканировался")
             for m in enabled_markets)
+        detector_txt = (
+            "детектор: только история цены"
+            + (f" · скрыто без истории: {s.get('alerts_unconfirmed_total', 0)}"
+               if s.get("alerts_unconfirmed_total", 0) else "")
+            if history_only else
+            "детектор: СМЕШАННЫЙ — скидка карточки тоже создаёт алерты")
         self.var_status.set(
             f"Режим: запрошен {requested}, фактически {mode} · "
+            f"{detector_txt} · "
             f"источники: {enabled_txt or '—'} · "
             f"товаров WB/Ozon: {s.get('products_wb', 0)}/{s.get('products_ozon', 0)} · "
             f"последний проход — {last_by_source} · "
@@ -902,6 +974,11 @@ class PriceHunterApp:
             wb_warn = (f"⚠ LIVE работает частично: один или несколько запросов/источников "
                        f"дали ошибку: {st['last_error'][:180]} "
                        "Успешные товары другого источника при этом сохраняются.")
+        elif mode == "live" and not history_only:
+            wb_warn = ("⚠ Включён смешанный детектор: большая скидка по карточке "
+                       "сама создаёт находки, поэтому возможны фейковые «−95%». "
+                       "Для режима по реальной истории включи галочку "
+                       "«Алерты только по падению vs истории цены».")
         elif mode == "live":
             wb_warn = ""
         else:

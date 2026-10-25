@@ -171,6 +171,47 @@ class DBTest(unittest.TestCase):
                 loaded = dbt.alerts(limit=1)[0]
                 self.assertEqual(loaded["hist_min"], 6_500.0)
                 self.assertAlmostEqual(loaded["vs_hist_min_pct"], 7.7, places=1)
+                self.assertTrue(loaded["history_confirmed"])
+            finally:
+                dbt.close()
+
+    def test_history_filter_and_stats_exclude_old_sticker_alerts(self):
+        own = {"count": 12, "median": 10_000, "min": 6_500, "prev": 9_900}
+        confirmed = detector.evaluate(
+            prod(10_000, 6_000, nm=778), own, None, CFG)
+        legacy = detector.evaluate(
+            prod(121_160, 5_351, nm=779), {"count": 0}, None,
+            dict(CFG, history_only=False))
+        self.assertIsNotNone(confirmed)
+        self.assertIsNotNone(legacy)
+        self.assertIsNone(legacy["hist_median"])
+        confirmed["source"] = legacy["source"] = "live"
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            dbt = DB(Path(d) / "t.db")
+            try:
+                for p in (prod(10_000, 6_000, nm=778),
+                          prod(121_160, 5_351, nm=779)):
+                    dbt.upsert_product({**p, "photo": "", "url": ""})
+                dbt.add_alert(confirmed)
+                dbt.add_alert(legacy)
+
+                all_alerts = dbt.alerts(limit=10)
+                self.assertEqual({a["nm"] for a in all_alerts}, {778, 779})
+                self.assertEqual(
+                    {a["nm"]: a["history_confirmed"] for a in all_alerts},
+                    {778: True, 779: False})
+                filtered = dbt.alerts(
+                    limit=10, only_history_confirmed=True)
+                self.assertEqual([a["nm"] for a in filtered], [778])
+
+                stats = dbt.stats()
+                self.assertEqual(stats["alerts_today"], 2)
+                self.assertEqual(stats["alerts_today_history_confirmed"], 1)
+                self.assertEqual(stats["alerts_today_unconfirmed"], 1)
+                self.assertEqual(stats["alerts_unconfirmed_total"], 1)
+                self.assertEqual(
+                    stats["potential_saving_history_today"],
+                    confirmed["saving"])
             finally:
                 dbt.close()
 
