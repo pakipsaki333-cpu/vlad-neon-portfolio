@@ -1,0 +1,440 @@
+#!/usr/bin/env bash
+#
+# doss — управление пользователями Doss на сервере.
+#
+#   doss user add  anna --expires 2026-12-31 --traffic 200
+#   doss user list
+#   doss link anna
+#   doss qr anna
+#   doss sub anna --url-base http://1.2.3.4
+#   doss user rm anna
+#   doss tick            (планировщик: гасит истёкшие подписки)
+#
+# Все пути можно переопределить переменными окружения (удобно для тестов).
+
+set -euo pipefail
+
+DOSS_ETC="${DOSS_ETC:-/etc/doss}"
+STATE="$DOSS_ETC/state.json"
+BASE_CONFIG="$DOSS_ETC/base-config.json"
+XRAY_CONFIG="${XRAY_CONFIG:-/usr/local/etc/xray/config.json}"
+XRAY_BIN="${XRAY_BIN:-/usr/local/bin/xray}"
+SUB_DIR="${SUB_DIR:-/var/www/doss-sub}"
+DOSS_NO_SERVICE="${DOSS_NO_SERVICE:-0}"
+
+die()  { printf 'ошибка: %s\n' "$*" >&2; exit 1; }
+info() { printf '%s\n' "$*" >&2; }
+
+need_state() {
+  [[ -f "$STATE" ]] || die "нет $STATE — сначала запусти install.sh"
+  command -v jq >/dev/null || die "нужен jq"
+}
+
+new_uuid() {
+  if [[ -r /proc/sys/kernel/random/uuid ]]; then
+    cat /proc/sys/kernel/random/uuid
+  else
+    python3 -c 'import uuid;print(uuid.uuid4())'
+  fi
+}
+
+urlencode() { jq -rn --arg v "$1" '$v|@uri'; }
+
+# Шаблон конфига Xray (клиенты подставляются в rebuild).
+build_base() {
+  need_state
+  local port dest priv sids xhttp xport path
+  port="$(jq -r '.server.port' "$STATE")"
+  dest="$(jq -r '.server.dest_domain' "$STATE")"
+  priv="$(jq -r '.server.private_key' "$STATE")"
+  sids="$(jq -c '.server.short_ids' "$STATE")"
+  xhttp="$(jq -r '.server.xhttp.enabled' "$STATE")"
+  xport="$(jq -r '.server.xhttp.port' "$STATE")"
+  path="$(jq -r '.server.xhttp.path' "$STATE")"
+
+  local tmp; tmp="$(mktemp)"
+  jq -n \
+    --argjson port "$port" \
+    --argjson xhttp "$xhttp" \
+    --argjson xport "$xport" \
+    --arg dest "$dest" \
+    --arg priv "$priv" \
+    --argjson sids "$sids" \
+    --arg path "$path" \
+'{
+  log: { loglevel: "warning", access: "none" },
+  inbounds: ([
+    {
+      tag: "reality-tcp",
+      listen: "0.0.0.0",
+      port: $port,
+      protocol: "vless",
+      settings: { clients: [], decryption: "none" },
+      streamSettings: {
+        network: "tcp",
+        security: "reality",
+        realitySettings: {
+          show: false,
+          dest: ($dest + ":443"),
+          xver: 0,
+          serverNames: [$dest],
+          privateKey: $priv,
+          shortIds: $sids
+        }
+      },
+      sniffing: { enabled: true, destOverride: ["http", "tls", "quic"] }
+    }
+  ] + (if $xhttp then [{
+      tag: "reality-xhttp",
+      listen: "0.0.0.0",
+      port: $xport,
+      protocol: "vless",
+      settings: { clients: [], decryption: "none" },
+      streamSettings: {
+        network: "xhttp",
+        security: "reality",
+        realitySettings: {
+          show: false,
+          dest: ($dest + ":443"),
+          xver: 0,
+          serverNames: [$dest],
+          privateKey: $priv,
+          shortIds: $sids
+        },
+        xhttpSettings: { path: $path, mode: "auto" }
+      },
+      sniffing: { enabled: true, destOverride: ["http", "tls", "quic"] }
+    }] else [] end)),
+  outbounds: [
+    { tag: "direct", protocol: "freedom" },
+    { tag: "block", protocol: "blackhole" }
+  ],
+  routing: {
+    domainStrategy: "AsIs",
+    rules: [
+      { type: "field", protocol: ["bittorrent"], outboundTag: "block" }
+    ]
+  }
+}' > "$tmp"
+
+  jq -e . "$tmp" >/dev/null || { rm -f "$tmp"; die "сгенерированный шаблон некорректен"; }
+  chmod 600 "$tmp"
+  mv "$tmp" "$BASE_CONFIG"
+  info "шаблон конфига: $BASE_CONFIG"
+}
+
+# Пересобирает конфиг Xray из состояния. Вызывается после любого изменения.
+rebuild() {
+  need_state
+  local clients_xhttp clients_tcp sids tmp
+  clients_tcp="$(jq -c '[ .users | to_entries[] | select(.value.enabled == true)
+                          | { id: .value.uuid, email: .key, flow: "xtls-rprx-vision" } ]' "$STATE")"
+  clients_xhttp="$(jq -c '[ .users | to_entries[] | select(.value.enabled == true)
+                             | { id: .value.uuid, email: .key } ]' "$STATE")"
+  sids="$(jq -c '(.server.short_ids + [ .users[].short_id ]) | unique' "$STATE")"
+  tmp="$(mktemp)"
+
+  jq --argjson tcp "$clients_tcp" \
+     --argjson xh "$clients_xhttp" \
+     --argjson sids "$sids" \
+     '.inbounds |= map(
+        if .tag == "reality-tcp" then .settings.clients = $tcp
+        elif .tag == "reality-xhttp" then .settings.clients = $xh
+        else . end
+      )
+      | .inbounds |= map(if .streamSettings.realitySettings
+                         then .streamSettings.realitySettings.shortIds = $sids
+                         else . end)' \
+     "$BASE_CONFIG" > "$tmp"
+
+  if [[ -x "$XRAY_BIN" ]]; then
+    "$XRAY_BIN" -test -config "$tmp" >/dev/null 2>&1 \
+      || { info "конфиг не прошёл проверку:"; "$XRAY_BIN" -test -config "$tmp" || true; rm -f "$tmp"; die "rebuild отменён"; }
+  fi
+
+  mkdir -p "$(dirname "$XRAY_CONFIG")"
+  install -m 0600 "$tmp" "$XRAY_CONFIG"
+  rm -f "$tmp"
+
+  if [[ "$DOSS_NO_SERVICE" != "1" ]] && command -v systemctl >/dev/null; then
+    systemctl restart xray 2>/dev/null || info "предупреждение: xray не перезапустился (systemctl)"
+  fi
+  # обновим файлы подписок
+  refresh_all_subs >/dev/null 2>&1 || true
+}
+
+write_sub_file() {
+  local name="$1" token="$2" file
+  mkdir -p "$SUB_DIR"
+  file="$SUB_DIR/$token.txt"
+  {
+    echo "# Doss • @${name} • $(date -u +%FT%TZ)"
+    echo "# срок: $(jq -r --arg n "$name" '.users[$n].expires // "бессрочно"' "$STATE")"
+    link_uri "$name"
+    if [[ "$(jq -r '.server.xhttp.enabled' "$STATE")" == "true" ]]; then
+      link_uri "$name" --xhttp || true
+    fi
+  } > "$file"
+  chmod 0644 "$file"
+  printf '%s\n' "$file"
+}
+
+refresh_all_subs() {
+  local n token
+  while IFS=$'\t' read -r n token; do
+    [[ -z "$n" || -z "$token" ]] && continue
+    write_sub_file "$n" "$token" >/dev/null
+  done < <(jq -r '.users | to_entries[] | [.key, .value.token] | @tsv' "$STATE")
+}
+
+link_uri() {
+  local name="$1" mode="tcp"
+  [[ "${2:-}" == "--xhttp" ]] && mode="xhttp"
+  jq -e --arg n "$name" '.users[$n] != null' "$STATE" >/dev/null || die "нет пользователя $name"
+
+  local uuid sid host port dest pub frag
+  uuid="$(jq -r --arg n "$name" '.users[$n].uuid' "$STATE")"
+  sid="$(jq -r  --arg n "$name" '.users[$n].short_id' "$STATE")"
+  host="$(jq -r '.server.host' "$STATE")"
+  pub="$(jq -r '.server.public_key' "$STATE")"
+  dest="$(jq -r '.server.dest_domain' "$STATE")"
+  frag="$(urlencode "Doss ${name} $( [[ "$mode" == "xhttp" ]] && echo XHTTP || echo Reality )")"
+
+  if [[ "$mode" == "xhttp" ]]; then
+    port="$(jq -r '.server.xhttp.port' "$STATE")"
+    local path
+    path="$(urlencode "$(jq -r '.server.xhttp.path' "$STATE")")"
+    printf 'vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=xhttp&path=%s&mode=auto#%s\n' \
+      "$uuid" "$host" "$port" "$dest" "$pub" "$sid" "$path" "$frag"
+  else
+    port="$(jq -r '.server.port' "$STATE")"
+    printf 'vless://%s@%s:%s?encryption=none&flow=xtls-rprx-vision&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp&headerType=none#%s\n' \
+      "$uuid" "$host" "$port" "$dest" "$pub" "$sid" "$frag"
+  fi
+}
+
+save_state() { # stdin -> state.json (атомарно)
+  local tmp; tmp="$(mktemp)"
+  cat > "$tmp"
+  jq -e . "$tmp" >/dev/null || { rm -f "$tmp"; die "внутренняя ошибка: некорректный JSON состояния"; }
+  chmod 600 "$tmp"
+  mv "$tmp" "$STATE"
+}
+
+# ------------------------------------------------------------------ команды
+cmd_user_add() {
+  local name="${1:-}"; shift || true
+  [[ -n "$name" ]] || die "укажи имя: doss user add <имя> [--expires YYYY-MM-DD] [--traffic GB] [--unlimited] [--note ...]"
+  local expires="" traffic="200" unlimited="false" note=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --expires)   expires="${2:?}"; shift 2 ;;
+      --traffic)   traffic="${2:?}"; shift 2 ;;
+      --unlimited) unlimited="true"; shift ;;
+      --note)      note="${2:?}"; shift 2 ;;
+      *) die "неизвестный флаг: $1" ;;
+    esac
+  done
+
+  [[ "$expires" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || [[ -z "$expires" ]] \
+    || die "дата в формате YYYY-MM-DD"
+
+  jq -e --arg n "$name" '.users[$n] == null' "$STATE" >/dev/null \
+    || die "пользователь '$name' уже есть (сначала: doss user rm $name)"
+
+  local uuid sid token
+  uuid="$(new_uuid)"
+  sid="$(openssl rand -hex 4)"
+  token="$(openssl rand -hex 16)"
+
+  jq --arg n "$name" --arg u "$uuid" --arg s "$sid" --arg t "$token" \
+     --arg created "$(date -u +%FT%TZ)" \
+     --arg expires "$expires" \
+     --argjson traffic "$traffic" \
+     --argjson unlimited "$unlimited" \
+     --arg note "$note" '
+     .users[$n] = {
+       uuid: $u, short_id: $s, token: $t, created: $created,
+       enabled: true,
+       expires: (if $expires == "" then null else $expires end),
+       traffic_gb: $traffic, unlimited: $unlimited, note: $note, used_gb: 0
+     }' "$STATE" | save_state
+
+  rebuild
+  write_sub_file "$name" "$token" >/dev/null || true
+  info "добавлен '$name' (uuid ${uuid:0:8}…, sid $sid)"
+  link_uri "$name"
+}
+
+cmd_user_rm() {
+  local name="${1:?укажи имя}"
+  jq -e --arg n "$name" '.users[$n] != null' "$STATE" >/dev/null || die "нет пользователя $name"
+  local token
+  token="$(jq -r --arg n "$name" '.users[$n].token' "$STATE")"
+  jq --arg n "$name" 'del(.users[$n])' "$STATE" | save_state
+  rm -f "$SUB_DIR/$token.txt"
+  rebuild
+  info "пользователь '$name' удалён, доступ отозван"
+}
+
+cmd_user_set() {
+  local name="${1:-}"; shift || true
+  [[ -n "$name" ]] || die "использование: doss user set <имя> [--enable|--disable] [--expires D] [--traffic GB] [--unlimited]"
+  jq -e --arg n "$name" '.users[$n] != null' "$STATE" >/dev/null || die "нет пользователя $name"
+
+  local enabled="" expires="" traffic="" unlimited="" tmp
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --enable)    enabled="true";  shift ;;
+      --disable)   enabled="false"; shift ;;
+      --expires)   expires="${2:?}"; shift 2 ;;
+      --traffic)   traffic="${2:?}"; shift 2 ;;
+      --unlimited) unlimited="true"; shift ;;
+      *) die "неизвестный флаг: $1" ;;
+    esac
+  done
+
+  tmp="$(mktemp)"
+  jq --arg n "$name" --arg en "$enabled" --arg ex "$expires" --arg tr "$traffic" --arg un "$unlimited" '
+    .users[$n]
+    | (if $en != "" then .enabled = ($en == "true") else . end)
+    | (if $ex != "" then .expires = $ex else . end)
+    | (if $tr != "" then .traffic_gb = ($tr | tonumber) else . end)
+    | (if $un != "" then .unlimited = true else . end)
+  ' "$STATE" > "$tmp"
+  # jq выше вернул только объект пользователя — склеиваем обратно
+  jq --arg n "$name" --slurpfile u "$tmp" '.users[$n] = $u[0]' "$STATE" | save_state
+  rm -f "$tmp"
+  rebuild
+  info "обновлён '$name'"
+}
+
+cmd_user_list() {
+  need_state
+  printf '%-16s %-9s %-8s %-12s %-9s %s\n' ИМЯ UUID ВКЛ СРОК ТРАФИК ЗАМЕТКА
+  jq -r '.users | to_entries[]
+    | [ .key,
+        (.value.uuid[0:8]),
+        (if .value.enabled then "да" else "нет" end),
+        (.value.expires // "бессрочно"),
+        (if .value.unlimited then "∞" else ((.value.traffic_gb|tostring) + " GB") end),
+        (.value.note // "") ] | @tsv' "$STATE" \
+  | while IFS=$'\t' read -r a b c d e f; do printf '%-16s %-9s %-8s %-12s %-9s %s\n' "$a" "$b" "$c" "$d" "$e" "$f"; done
+}
+
+cmd_link() {
+  local name="${1:?укажи имя}"
+  link_uri "$name"
+}
+
+cmd_qr() {
+  local name="${1:?укажи имя}"
+  local uri; uri="$(link_uri "$name")"
+  if command -v qrencode >/dev/null; then
+    qrencode -t ANSIUTF8 "$uri"
+  else
+    info "qrencode не установлен — вот ссылка:"
+  fi
+  printf '%s\n' "$uri"
+}
+
+cmd_sub() {
+  local name="${1:-}"; shift || true
+  [[ -n "$name" ]] || die "использование: doss sub <имя> [--url-base http://host]"
+  local base=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --url-base) base="${2:?}"; shift 2 ;;
+      *) die "неизвестный флаг: $1" ;;
+    esac
+  done
+  local token file
+  token="$(jq -r --arg n "$name" '.users[$n].token' "$STATE")"
+  file="$(write_sub_file "$name" "$token")"
+  [[ -n "$base" ]] && printf '%s/sub/%s.txt\n' "${base%/}" "$token"
+  info "файл подписки: $file"
+}
+
+cmd_tick() {
+  need_state
+  local today; today="$(date -u +%F)"
+  local expired
+  expired="$(jq -r --arg d "$today" \
+    '[.users | to_entries[] | select(.value.enabled and .value.expires != null and .value.expires < $d) | .key] | join(" ")' "$STATE")"
+  if [[ -z "$expired" ]]; then
+    info "истёкших подписок нет"
+    return
+  fi
+  for n in $expired; do
+    jq --arg n "$n" '.users[$n].enabled = false' "$STATE" | save_state
+    info "отключён: $n (срок истёк)"
+  done
+  rebuild
+}
+
+cmd_status() {
+  need_state
+  echo "узел:      $(jq -r '.server.host' "$STATE"):$(jq -r '.server.port' "$STATE")"
+  echo "маска:     $(jq -r '.server.dest_domain' "$STATE")"
+  echo "XHTTP:     $(jq -r '.server.xhttp.enabled' "$STATE") на $(jq -r '.server.xhttp.port' "$STATE")/tcp"
+  echo "users:     $(jq '.users | length' "$STATE") всего, $(jq '[.users[]|select(.enabled)]|length' "$STATE") активных"
+  if command -v systemctl >/dev/null; then
+    printf 'xray:      %s\n' "$(systemctl is-active xray 2>/dev/null || echo 'n/a')"
+  fi
+  if [[ -x "$XRAY_BIN" && -f "$XRAY_CONFIG" ]]; then
+    "$XRAY_BIN" -test -config "$XRAY_CONFIG" >/dev/null 2>&1 && echo "config:    ok" || echo "config:    ОШИБКА"
+  fi
+}
+
+cmd_keys() {
+  need_state
+  echo "public_key: $(jq -r '.server.public_key' "$STATE")"
+  echo "short_ids:  $(jq -c '.server.short_ids' "$STATE")"
+  echo "mask:       $(jq -r '.server.dest_domain' "$STATE")"
+}
+
+usage() {
+  cat <<'EOF'
+doss — управление пользователями
+
+  doss user add <имя> [--expires YYYY-MM-DD] [--traffic 200] [--unlimited] [--note "..."]
+  doss user list
+  doss user rm <имя>
+  doss user set <имя> [--enable|--disable] [--expires D] [--traffic GB] [--unlimited]
+  doss link <имя>              vless:// для Reality/TCP
+  doss qr <имя>                QR + ссылка
+  doss sub <имя> [--url-base http://host]
+  doss tick                    отключить истёкшие (по cron/timer)
+  doss build-base              пересобрать шаблон конфига из state.json
+  doss rebuild                 применить пользователей к конфигу Xray
+  doss status | keys
+EOF
+}
+
+main() {
+  local cmd="${1:-}"; shift || true
+  case "$cmd" in
+    user)
+      local sub="${1:-}"; shift || true
+      case "$sub" in
+        add)  cmd_user_add "$@" ;;
+        rm)   cmd_user_rm "$@" ;;
+        set)  cmd_user_set "$@" ;;
+        list|ls) cmd_user_list ;;
+        *) usage; exit 1 ;;
+      esac ;;
+    link)    cmd_link "$@" ;;
+    qr)      cmd_qr "$@" ;;
+    sub)     cmd_sub "$@" ;;
+    build-base) build_base ;;
+    tick)    cmd_tick ;;
+    rebuild) rebuild; info "конфиг пересобран" ;;
+    status)  cmd_status ;;
+    keys)    cmd_keys ;;
+    ""|-h|--help) usage ;;
+    *) die "неизвестная команда: $cmd" ;;
+  esac
+}
+
+main "$@"
