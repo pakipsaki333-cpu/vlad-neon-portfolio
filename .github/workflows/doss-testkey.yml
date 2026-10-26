@@ -28,7 +28,7 @@ on:
       - "doss/.testkey-request"
 
 permissions:
-  contents: read
+  contents: write   # чтобы опубликовать ссылку в репозитории (doss/.testkey-result)
 
 jobs:
   testkey:
@@ -122,6 +122,30 @@ jobs:
           echo "$LINK"
           echo ""
           echo "=================================================="
+
+      - name: Опубликовать ссылку в репозитории
+        run: |
+          set -euo pipefail
+          EXPIRES="$(date -u -d "+${MINUTES} minutes" +%FT%TZ 2>/dev/null || date -u +%FT%TZ)"
+          {
+            echo "# Тестовый ключ Doss (временный)"
+            echo ""
+            echo "Создан: $(date -u +%FT%TZ)"
+            echo "Умирает: ${EXPIRES} (UTC)"
+            echo "Job: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo ""
+            echo '```'
+            echo "$LINK"
+            echo '```'
+            echo ""
+            echo "Это тестовый стенд на раннере GitHub: после истечения ссылка мертва."
+            echo "Постоянный сервис — см. DEPLOY.md."
+          } > doss/.testkey-result
+          git config user.name "doss-bot"
+          git config user.email "doss-bot@users.noreply.github.com"
+          git add doss/.testkey-result
+          git commit -m "testkey: опубликована ссылка (умирает ${EXPIRES})" || true
+          git push || echo "не смог запушить результат (не критично)"
 
       - name: Держать узел живым
         run: |
