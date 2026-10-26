@@ -82,24 +82,36 @@ def build() -> str:
     return html
 
 
+def write_sums() -> dict:
+    """Пересчитывает SHA256SUMS.txt по всем файлам, которые есть в dist/."""
+    sums = DIST / "SHA256SUMS.txt"
+    old = sums.read_text(encoding="utf-8") if sums.exists() else ""
+    header = [l for l in old.splitlines() if l.startswith("#")]
+    lines = header or [
+        "# Контрольные суммы файлов NeonMiner",
+        "# Проверка в PowerShell: (Get-FileHash .\\NeonMiner.exe -Algorithm SHA256).Hash",
+    ]
+    result = {}
+    for name in ("NeonMiner.exe", "NeonMiner-wallet.html", "NeonMiner-wallet.zip"):
+        path = DIST / name
+        if not path.exists():
+            continue
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        result[name] = digest
+        lines.append(f"{digest}  {name}")
+    sums.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return result
+
+
 def main() -> int:
     html = build()
-    digest = hashlib.sha256(html.encode("utf-8")).hexdigest()
-    zip_digest = hashlib.sha256(ZIP.read_bytes()).hexdigest()
+    hashes = write_sums()
     print(f"✓ {OUT.relative_to(ROOT)} — {len(html.encode('utf-8')):,} байт")
     print(f"✓ {ZIP.relative_to(ROOT)} — {ZIP.stat().st_size:,} байт (один клик → скачать)")
-    print(f"  SHA256: {digest}")
+    print(f"  SHA256 html: {hashes.get('NeonMiner-wallet.html')}")
+    print(f"  SHA256 zip : {hashes.get('NeonMiner-wallet.zip')}")
     print("  CSP: default-src 'none' · connect-src 'none' · сетевых вызовов нет")
     print("  Вектор: 25×'plus' → 44bUDLb1…87C6VR (проверяется и в браузере, и в тестах)")
-    sums = DIST / "SHA256SUMS.txt"
-    old = sums.read_text(encoding="utf-8") if sums.exists() else (
-        "# Контрольные суммы файлов NeonMiner\n")
-    old = "\n".join(line for line in old.splitlines()
-                    if line.strip() and "NeonMiner-wallet" not in line)
-    sums.write_text(old.rstrip() + "\n"
-                    + f"{digest}  NeonMiner-wallet.html\n"
-                    + f"{zip_digest}  NeonMiner-wallet.zip\n",
-                    encoding="utf-8")
     return 0
 
 

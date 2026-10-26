@@ -12,6 +12,9 @@
 .progress-line.ok{color:var(--cyan)}.progress-line.err{color:var(--pink)}.progress-line.busy{color:var(--amber)}
 .control-path{margin-top:5px;font:10px var(--mono);color:var(--muted);word-break:break-all}
 .sim-note{margin-top:9px;color:var(--amber);border-left:2px solid var(--amber);padding-left:9px;line-height:1.5}
+.wallet-link{display:block;margin-top:12px;padding:9px 11px;border:1px dashed rgba(47,240,207,.35);border-radius:9px;
+  color:var(--cyan);font-size:11.5px;text-decoration:none;background:rgba(47,240,207,.045)}
+.wallet-link:hover{border-style:solid;background:rgba(47,240,207,.09)}
 .log{background:#04060a;border:1px solid var(--line);border-radius:10px;padding:12px;
   height:172px;max-height:172px;overflow:auto;font:10.5px/1.55 var(--mono);color:#9fb3c8;white-space:pre-wrap;word-break:break-word}
 .log::-webkit-scrollbar{width:7px}.log::-webkit-scrollbar-thumb{background:rgba(120,150,190,.25);border-radius:5px}

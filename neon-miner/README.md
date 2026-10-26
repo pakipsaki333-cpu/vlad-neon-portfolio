@@ -10,12 +10,18 @@ Windows / Linux / macOS. Майнер не пишется с нуля — исп
 
 ## 🪙 Кошелёк — создай за 10 секунд (офлайн)
 
-**[→ Скачать `dist/NeonMiner-wallet.zip`](dist/NeonMiner-wallet.zip)** ← **эту ссылку и жми.**
-Внутри `NeonMiner-wallet.html` + `КАК-ОТКРЫТЬ.txt`. Распакуй и открой HTML двойным кликом.
+**Самый простой путь — он уже внутри exe.** Запусти `NeonMiner.exe` и нажми
+«🪙 Нет кошелька? Создать офлайн за 10 секунд»: откроется локальная страница
+`http://127.0.0.1:8765/wallet`. Она отдаётся встроенным сервером как настоящий
+`text/html` — без GitHub raw, CDN и проблем с `text/plain`. Работает без интернета.
+
+**[→ Альтернатива: скачать `dist/NeonMiner-wallet.zip`](dist/NeonMiner-wallet.zip)** —
+внутри `NeonMiner-wallet.html` + `КАК-ОТКРЫТЬ.txt`. Распакуй и открой HTML двойным кликом.
 
 > ⚠️ Не открывай `.html` через `raw.githubusercontent.com` или jsDelivr: они отдают его
 > как `text/plain`, и браузер показывает исходный код вместо страницы. Файл надо именно
-> **скачать и открыть локально** — это ещё и безопаснее. Альтернатива: [превью Arena](https://8080-ibs2m3evu55s4jjgthtqe.e2b.app/wallet).
+> **скачать и открыть локально** — это ещё и безопаснее. В первый комментарий файла
+> встроена эта же подсказка. Альтернатива: [превью Arena](https://8080-ibs2m3evu55s4jjgthtqe.e2b.app/wallet).
 
 [Исходники](windows/web/wallet_crypto.js) · [тесты](tests/test_wallet.py) ·
 [отдельный HTML](dist/NeonMiner-wallet.html)

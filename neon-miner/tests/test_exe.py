@@ -48,6 +48,12 @@ class WindowsExeTest(unittest.TestCase):
         for needle in (b"NEON", b"static/app.js", b"/api/start", b"consent"):
             self.assertIn(needle, self.data, f"в exe нет {needle!r}")
 
+    def test_wallet_generator_is_embedded(self):
+        # /wallet отдаётся локальным сервером как text/html — без GitHub raw и CDN.
+        for needle in (b"/wallet", b'content="default-src', b"getRandomValues",
+                       b"window.NM_WORDS", b"44bUDLb1Fb8W"):
+            self.assertIn(needle, self.data, f"в exe нет встроенного генератора: {needle!r}")
+
     def test_embedded_pool_catalog(self):
         for name in (b"c3pool", b"hashvault", b"supportxmr", b"moneroocean"):
             self.assertIn(name, self.data)

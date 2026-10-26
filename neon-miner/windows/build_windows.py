@@ -159,6 +159,13 @@ typedef struct { const char *id, *json; } DemoDef;
     out.append(c_blob("EMBED_STYLE_CSS", css))
     out.append(c_blob("EMBED_APP_JS", js))
     out.append(c_blob("EMBED_FAVICON_SVG", svg))
+    # Офлайн-генератор кошелька зашит внутрь exe: открывается как /wallet
+    # с локального сервера, без CDN и без text/plain-проблемы GitHub raw.
+    wallet_path = DIST / "NeonMiner-wallet.html"
+    if wallet_path.exists():
+        out.append(c_blob("EMBED_WALLET_HTML", wallet_path.read_text(encoding="utf-8")))
+    else:
+        out.append(c_blob("EMBED_WALLET_HTML", "<h1>Run windows/build_wallet.py first</h1>"))
     out.append("#endif /* NEONMINER_EMBED_H */\n")
     return "".join(out)
 
@@ -185,6 +192,12 @@ def find_zig() -> str:
 def main() -> int:
     BUILD.mkdir(parents=True, exist_ok=True)
     DIST.mkdir(parents=True, exist_ok=True)
+
+    print("=== 0. Офлайн-генератор кошелька (зашивается в exe) ===")
+    sys.path.insert(0, str(HERE))
+    import build_wallet
+    build_wallet.build()
+    print(f"    dist/NeonMiner-wallet.html + .zip готовы")
 
     print("=== 1. Параметры релиза XMRig ===")
     release = latest_xmrig()
@@ -236,10 +249,7 @@ def main() -> int:
 
     print("=== 5. Контрольные суммы и инструкция ===")
     digest = hashlib.sha256(exe).hexdigest()
-    (DIST / "SHA256SUMS.txt").write_text(
-        f"# NeonMiner.exe — собран {release['tag']} из windows/neonminer.c\n"
-        f"# Проверка в PowerShell: (Get-FileHash .\\NeonMiner.exe -Algorithm SHA256).Hash\n"
-        f"{digest}  NeonMiner.exe\n", encoding="utf-8")
+    build_wallet.write_sums()
     write_windows_readme(digest, release, len(exe))
     print(f"    SHA256 {digest}")
     print(f"    dist/: NeonMiner.exe, SHA256SUMS.txt, README-Windows.md")
@@ -274,10 +284,17 @@ def write_windows_readme(digest: str, release: dict, size: int) -> None:
 > именно **скачать и открыть локально** (`file:///…`). Это кстати безопаснее: можно
 > вообще отключить интернет.
 
-Внутри архива: сам HTML-файл и `КАК-ОТКРЫТЬ.txt`. Дальше:
+Внутри архива: сам HTML-файл и `КАК-ОТКРЫТЬ.txt`.
 
-1. Открой распакованный `NeonMiner-wallet.html` двойным кликом (можно отключить интернет —
-   в файле стоит CSP `default-src 'none'`, сетевых запросов нет и быть не может).
+✅ **Ещё проще: генератор уже встроен в сам exe.** Запусти `NeonMiner.exe`, в панели
+нажми «🪙 Нет кошелька? Создать офлайн за 10 секунд ↗» — откроется
+`http://127.0.0.1:8765/wallet`. Это локальная страница с правильным `text/html`,
+никаких GitHub raw, CDN и text/plain-проблем. Работает даже без интернета.
+
+Дальше (для любого из способов):
+
+1. Открой генератор (можно отключить интернет — в файле стоит CSP
+   `default-src 'none'`, сетевых запросов нет и быть не может).
 2. Нажми «🎲 Создать кошелёк». Вверху должен гореть зелёный статус «8/8 проверок пройдено».
 3. **Запиши 25 слов на бумагу.** Это и есть твои деньги: кто знает сид — владеет монетами.
    Не фотографируй, не кидай в мессенджеры и облако. Скачай бэкап `.txt` и убери его офлайн.

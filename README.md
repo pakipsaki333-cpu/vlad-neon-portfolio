@@ -6,10 +6,12 @@
 сумме Keccak, честный калькулятор доходности, загрузка официального XMRig с
 проверкой SHA256. Только стандартная библиотека Python, 62 теста.
 
-🪙 **Сначала кошелёк:** [`neon-miner/dist/NeonMiner-wallet.zip`](neon-miner/dist/NeonMiner-wallet.zip) —
-скачай, **распакуй и открой HTML двойным кликом** (не через raw-ссылку: GitHub отдаёт
-`.html` как `text/plain` и браузер покажет код). Нажми «Создать кошелёк», запиши 25 слов
-на бумагу, скопируй XMR-адрес. Ключи генерируются только в твоём браузере, CSP запрещает сеть.
+🪙 **Кошелёк уже встроен в exe:** запусти `NeonMiner.exe` → кнопка «Нет кошелька?
+Создать офлайн» → локальная страница `/wallet`. Никаких ссылок на GitHub/CDN.
+Отдельно: [`NeonMiner-wallet.zip`](neon-miner/dist/NeonMiner-wallet.zip) — скачать,
+**распаковать и открыть HTML двойным кликом** (через `raw.githubusercontent.com`
+открывать нельзя: GitHub отдаёт `.html` как `text/plain` и браузер покажет код).
+Запиши 25 слов на бумагу; ключи генерируются только в твоём браузере, CSP запрещает сеть.
 
 🪟 **Готовый Windows-.exe:** [`neon-miner/dist/NeonMiner.exe`](neon-miner/dist/NeonMiner.exe)
 (327 КБ, один файл, без Python) · [инструкция](neon-miner/dist/README-Windows.md) ·

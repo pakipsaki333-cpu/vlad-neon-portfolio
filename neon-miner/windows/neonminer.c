@@ -930,6 +930,8 @@ static void handle_client(sock_t c) {
     char *body=strstr(req,"\r\n\r\n"); body=body?body+4:"";
     /* статика */
     if(!strcmp(path,"/")||!strcmp(path,"/index.html")) send_resp(c,200,"text/html; charset=utf-8",EMBED_INDEX_HTML,strlen(EMBED_INDEX_HTML));
+    else if(!strcmp(path,"/wallet")||!strcmp(path,"/wallet.html")||!strcmp(path,"/create-wallet"))
+        send_resp(c,200,"text/html; charset=utf-8",EMBED_WALLET_HTML,strlen(EMBED_WALLET_HTML));
     else if(!strcmp(path,"/static/style.css")) send_resp(c,200,"text/css; charset=utf-8",EMBED_STYLE_CSS,strlen(EMBED_STYLE_CSS));
     else if(!strcmp(path,"/static/app.js")) send_resp(c,200,"application/javascript; charset=utf-8",EMBED_APP_JS,strlen(EMBED_APP_JS));
     else if(!strcmp(path,"/static/favicon.svg")) send_resp(c,200,"image/svg+xml",EMBED_FAVICON_SVG,strlen(EMBED_FAVICON_SVG));
