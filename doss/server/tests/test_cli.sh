@@ -78,6 +78,19 @@ check "истёкший убран из конфига" "[[ \$(jq '[.inbounds[]|
 STATUS="$("$CLI" status)"
 check "статус считает активных" "grep -q '3 всего, 2 активных' <<< \"\$STATUS\""
 
+echo "== WebSocket-транспорт (режим PaaS)"
+WS="$("$CLI" ws-enable --host doss-demo.onrender.com --path /doss-ws --listen 10000 2>/dev/null)"
+check "ссылка ws выдана" "[[ '$WS' == vless://* ]]"
+check "ws + tls в ссылке" "[[ '$WS' == *'type=ws'* && '$WS' == *'security=tls'* ]]"
+check "sni = домен платформы" "[[ '$WS' == *'sni=doss-demo.onrender.com'* ]]"
+check "порт 443" "[[ '$WS' == *':443?'* ]]"
+check "ws-инбаунд в конфиге Xray" "[[ \$(jq '[.inbounds[]|select(.tag==\"vless-ws\")]|length' '$XRAY_CONFIG') == 1 ]]"
+check "порт инбаунда = listen" "[[ \$(jq -r '.inbounds[]|select(.tag==\"vless-ws\")|.port' '$XRAY_CONFIG') == 10000 ]]"
+check "клиент есть в ws-инбаунде" "[[ \$(jq '.inbounds[]|select(.tag==\"vless-ws\")|.settings.clients|length' '$XRAY_CONFIG') -ge 1 ]]"
+check "подписка содержит 3 профиля" "[[ \$(grep -c '^vless://' \$('$CLI' sub boris 2>&1 | sed -n 's/^файл подписки: //p')) == 3 ]]"
+"$CLI" ws-disable >/dev/null 2>&1
+check "ws-disable убирает инбаунд" "[[ \$(jq '[.inbounds[]|select(.tag==\"vless-ws\")]|length' '$XRAY_CONFIG') == 0 ]]"
+
 echo "== traffic (заглушка Xray API)"
 cat > "$ROOT/fake-xray" <<'FAKE'
 #!/usr/bin/env bash

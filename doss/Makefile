@@ -2,18 +2,19 @@
 PY := $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3)
 PYTEST_DEPS = fastapi uvicorn qrcode[pil] python-multipart httpx aiogram aiosqlite
 
-.PHONY: help test test-server test-bot test-panel panel bot venv clean bundle
+.PHONY: help test test-server test-bot test-panel test-paas panel bot venv clean bundle
 
 help:
 	@echo "make test         — все тесты (server + bot + panel)"
 	@echo "make test-server  — CLI doss (33 проверки)"
 	@echo "make test-bot     — логика бота (33) + интеграция с CLI (10)"
 	@echo "make test-panel   — панель/подписки/админка (23)"
+	@echo "make test-paas    — режим бесплатного хостинга (17)"
 	@echo "make panel        — демо-панель на http://0.0.0.0:8000"
 	@echo "make bot          — запуск бота (нужен BOT_TOKEN в doss/bot/.env)"
 	@echo "make venv         — окружение .venv с зависимостями"
 
-test: test-server test-bot test-panel
+test: test-server test-bot test-panel test-paas
 
 test-server:
 	bash server/tests/test_cli.sh
@@ -21,6 +22,9 @@ test-server:
 test-bot:
 	$(PY) bot/tests/selftest.py
 	$(PY) bot/tests/test_provider_cli.py
+
+test-paas:
+	bash deploy/paas/tests/test_paas.sh
 
 test-panel:
 	@$(PY) -c "import fastapi" 2>/dev/null || (echo "нужен venv: make venv" && exit 1)
@@ -39,6 +43,7 @@ bot:
 
 bundle:
 	@cd .. && tar --exclude='doss/.venv' --exclude='__pycache__' --exclude='*.pyc' \
+		--exclude='doss/doss-bundle.tar.gz' --exclude='doss/*.sqlite3' \
 		-czf doss-bundle.tar.gz doss && mv doss-bundle.tar.gz doss/
 	@echo "готово: doss/doss-bundle.tar.gz"
 	@echo "  scp doss/doss-bundle.tar.gz root@SERVER:/tmp/"

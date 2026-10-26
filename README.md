@@ -18,8 +18,10 @@ run.bat
 
 Собственная VPN-инфраструктура: бесплатный узел на Oracle Cloud Always Free,
 VLESS + REALITY (+ XHTTP / AmneziaWG), CLI для доступа, Telegram-бот с подпиской
-за Stars и веб-панель (лендинг + админка). 99 автотестов, `make test`.
+за Stars и веб-панель (лендинг + админка). Работает и **без карты**:
+бесплатный PaaS (VLESS+WebSocket) или VPS с оплатой по СБП. 126 автотестов.
 
 ➡ **План, установка и ограничения: [`doss/README.md`](doss/README.md)**
 ➡ Где брать бесплатные сервера в 2026: [`doss/docs/free-servers.md`](doss/docs/free-servers.md)
+➡ Нет карты? Четыре схемы запуска: [`doss/docs/no-card.md`](doss/docs/no-card.md)
 ➡ Telegram-бот: [`doss/bot/`](doss/bot/README.md) · панель: [`doss/panel/`](doss/panel/app.py) · Android: [`doss/android/`](doss/android/README.md)

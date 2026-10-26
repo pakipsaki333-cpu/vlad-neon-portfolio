@@ -2,12 +2,14 @@
 
 demo  — ничего не создаёт (для локального запуска и тестов);
 local — вызывает CLI `doss` на той же машине;
-ssh   — вызывает CLI `doss` на VPN-сервере по SSH (рекомендуется для прод).
+ssh   — вызывает CLI `doss` на VPN-сервере по SSH (рекомендуется для прод);
+link  — все получают одну заранее готовую ссылку (режим бесплатного PaaS).
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 import shlex
 import uuid
 from abc import ABC, abstractmethod
@@ -104,9 +106,43 @@ class CommandProvider(Provider):
         await self._run("user", "rm", name)
 
 
+class LinkProvider(Provider):
+    """Режим «одна ссылка на всех»: для PaaS, где нет CLI и per-user учёта.
+
+    Ссылка берётся из DOSS_LINK. Продление/лимиты на стороне платформы
+    не применяются, поэтому бот честно говорит об этом в /me.
+    """
+
+    def __init__(self, link: str) -> None:
+        if not link.startswith("vless://"):
+            raise ProviderError("DOSS_LINK должен начинаться с vless://")
+        self._link = link.strip()
+
+    async def add_user(self, name: str, *, expires: str | None, traffic_gb: int,
+                       unlimited: bool = False, note: str = "") -> str:
+        return self._link
+
+    async def link(self, name: str) -> str:
+        return self._link
+
+    async def update_user(self, name: str, *, expires: str | None = None,
+                          traffic_gb: int | None = None,
+                          unlimited: bool | None = None,
+                          enabled: bool | None = None) -> None:
+        return None
+
+    async def remove_user(self, name: str) -> None:
+        return None
+
+
 def build_provider(cfg) -> Provider:
     if cfg.provider == "local":
         return CommandProvider(shlex.split(cfg.doss_bin))
+    if cfg.provider == "link":
+        link = os.environ.get("DOSS_LINK", "")
+        if not link:
+            raise ProviderError("PROVIDER=link, но DOSS_LINK не задан")
+        return LinkProvider(link)
     if cfg.provider == "ssh":
         if not cfg.ssh_host:
             raise ProviderError("PROVIDER=ssh, но SSH_HOST не задан")

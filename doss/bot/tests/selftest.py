@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 import tempfile
 from datetime import date, timedelta
@@ -15,7 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from dossbot.config import Config  # noqa: E402
 from dossbot.db import Database  # noqa: E402
-from dossbot.providers import DemoProvider, ProviderError  # noqa: E402
+from dossbot.providers import (DemoProvider, LinkProvider,  # noqa: E402
+                               ProviderError)
 from dossbot.service import (NotAllowed, SubscriptionService,  # noqa: E402
                              claim_owner, resolve_owner)
 
@@ -110,12 +112,29 @@ async def main() -> int:
     check("OWNER_ID в env важнее", resolve_owner(cfg_forced, db) == 12345)
     check("claim с готовым владельцем ничего не меняет", claim_owner(cfg_forced, db, 999) is False)
 
+    print("== режим одной ссылки (бесплатный PaaS)")
+    os.environ["DOSS_LINK"] = "vless://demo-uuid@doss.onrender.com:443?type=ws&security=tls#Doss"
+    lp = LinkProvider(os.environ["DOSS_LINK"])
+    cfg_link = Config(db_path=cfg.db_path, provider="link", owner_id=0)
+    svc_link = SubscriptionService(db, lp, cfg_link)
+    acc = await svc_link.start_trial(1001, "link_user")
+    check("ссылка из DOSS_LINK", acc.link.startswith("vless://demo-uuid@doss.onrender.com"))
+    acc2 = await svc_link.apply_payment(1001, "link_user", "ch_link", 150, "XTR")
+    check("оплата не ломается в режиме link", acc2.link == acc.link)
+    await svc_link.grant(1002, None, True)
+    check("grant тоже работает", (await svc_link.get_access(1002)).link == acc.link)
+    try:
+        LinkProvider("https://not-a-vless-link")
+        check("мусорная ссылка отклоняется", False)
+    except ProviderError:
+        check("мусорная ссылка отклоняется", True)
+
     print("== статистика")
     s = db.stats()
-    check("считает пользователей", s["total"] == 5, f"total={s['total']}")
+    check("считает пользователей", s["total"] == 7, f"total={s['total']}")
     check("неудачная выдача не создаёт мусорных строк", db.get(999) is None)
-    check("считает платежи", s["payments_count"] == 3, f"n={s['payments_count']}")
-    check("сумма платежей", s["payments_sum"] == 450)
+    check("считает платежи", s["payments_count"] == 4, f"n={s['payments_count']}")
+    check("сумма платежей", s["payments_sum"] == 600, f"sum={s['payments_sum']}")
 
     db.close()
     print(f"\nитог: {PASS} ок, {FAIL} провал(ов)")

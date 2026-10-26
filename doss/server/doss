@@ -52,6 +52,12 @@ build_base() {
   xport="$(jq -r '.server.xhttp.port' "$STATE")"
   path="$(jq -r '.server.xhttp.path' "$STATE")"
 
+  # WebSocket: нужен там, где наружу отдаётся только HTTPS (PaaS, CDN, чужой nginx)
+  local ws_enabled ws_port ws_path
+  ws_enabled="$(jq -r '.server.ws.enabled // false' "$STATE")"
+  ws_port="$(jq -r '.server.ws.listen_port // 8080' "$STATE")"
+  ws_path="$(jq -r '.server.ws.path // "/doss-ws"' "$STATE")"
+
   local tmp; tmp="$(mktemp)"
   jq -n \
     --argjson port "$port" \
@@ -130,6 +136,21 @@ build_base() {
   }
 }' > "$tmp"
 
+  if [[ "$ws_enabled" == "true" ]]; then
+    local tmp2; tmp2="$(mktemp)"
+    jq --argjson wport "$ws_port" --arg wpath "$ws_path" '
+      .inbounds += [{
+        tag: "vless-ws",
+        listen: "0.0.0.0",
+        port: $wport,
+        protocol: "vless",
+        settings: { clients: [], decryption: "none" },
+        streamSettings: { network: "ws", security: "none", wsSettings: { path: $wpath } },
+        sniffing: { enabled: true, destOverride: ["http", "tls", "quic"] }
+      }]' "$tmp" > "$tmp2"
+    mv "$tmp2" "$tmp"
+  fi
+
   jq -e . "$tmp" >/dev/null || { rm -f "$tmp"; die "сгенерированный шаблон некорректен"; }
   chmod 600 "$tmp"
   mv "$tmp" "$BASE_CONFIG"
@@ -153,6 +174,7 @@ rebuild() {
      '.inbounds |= map(
         if .tag == "reality-tcp" then .settings.clients = $tcp
         elif .tag == "reality-xhttp" then .settings.clients = $xh
+        elif .tag == "vless-ws" then .settings.clients = $xh
         else . end
       )
       | .inbounds |= map(if .streamSettings.realitySettings
@@ -187,6 +209,9 @@ write_sub_file() {
     if [[ "$(jq -r '.server.xhttp.enabled' "$STATE")" == "true" ]]; then
       link_uri "$name" --xhttp || true
     fi
+    if [[ "$(jq -r '.server.ws.enabled // false' "$STATE")" == "true" ]]; then
+      link_uri "$name" --ws || true
+    fi
   } > "$file"
   chmod 0644 "$file"
   printf '%s\n' "$file"
@@ -203,6 +228,7 @@ refresh_all_subs() {
 link_uri() {
   local name="$1" mode="tcp"
   if [[ "${2:-}" == "--xhttp" ]]; then mode="xhttp"; fi
+  if [[ "${2:-}" == "--ws" ]]; then mode="ws"; fi
   jq -e --arg n "$name" '.users[$n] != null' "$STATE" >/dev/null || die "нет пользователя $name"
 
   local uuid sid host port dest pub frag
@@ -212,6 +238,20 @@ link_uri() {
   pub="$(jq -r '.server.public_key' "$STATE")"
   dest="$(jq -r '.server.dest_domain' "$STATE")"
   frag="$(urlencode "Doss ${name} $( [[ "$mode" == "xhttp" ]] && echo XHTTP || echo Reality )")"
+
+  if [[ "$mode" == "ws" ]]; then
+    local ws_host ws_port ws_path ws_sni ws_tls ws_q
+    ws_host="$(jq -r '.server.ws.host // .server.host' "$STATE")"
+    ws_port="$(jq -r '.server.ws.port // 443' "$STATE")"
+    ws_path="$(jq -r '.server.ws.path // "/doss-ws"' "$STATE")"
+    ws_sni="$(jq -r '.server.ws.sni // .server.ws.host // .server.host' "$STATE")"
+    ws_tls="$(jq -r 'if .server.ws.tls == false then "none" else "tls" end' "$STATE")"
+    ws_q="encryption=none&security=${ws_tls}&type=ws&host=$(urlencode "$ws_sni")&path=$(urlencode "$ws_path")"
+    if [[ "$ws_tls" == "tls" ]]; then ws_q="${ws_q}&sni=$(urlencode "$ws_sni")&fp=chrome"; fi
+    printf 'vless://%s@%s:%s?%s#%s\n' \
+      "$uuid" "$ws_host" "$ws_port" "$ws_q" "$(urlencode "Doss ${name} WS")"
+    return 0
+  fi
 
   if [[ "$mode" == "xhttp" ]]; then
     port="$(jq -r '.server.xhttp.port' "$STATE")"
@@ -446,11 +486,56 @@ cmd_traffic() {
   fi
 }
 
+# Включить WebSocket-транспорт (для PaaS, CDN, чужого nginx).
+#   doss ws-enable --host doss.onrender.com [--port 443] [--path /doss-ws] [--listen 8080] [--insecure]
+cmd_ws_enable() {
+  need_state
+  local host="" port="443" path="/doss-ws" listen="8080" tls="true"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --host)     host="${2:?}"; shift 2 ;;
+      --port)     port="${2:?}"; shift 2 ;;
+      --path)     path="${2:?}"; shift 2 ;;
+      --listen)   listen="${2:?}"; shift 2 ;;
+      --insecure) tls="false"; shift ;;
+      *) die "неизвестный флаг: $1" ;;
+    esac
+  done
+  [[ -n "$host" ]] || die "укажи --host (домен, на который будет ходить клиент)"
+
+  jq --arg h "$host" --argjson p "$port" --arg pa "$path" \
+     --argjson lp "$listen" --argjson tls "$tls" '
+     .server.ws = {enabled: true, host: $h, port: $p, sni: $h,
+                   path: $pa, listen_port: $lp, tls: $tls}' "$STATE" | save_state
+  build_base
+  rebuild
+  info "WebSocket включён: клиент → $host:$port$path (TLS: $tls), Xray слушает $listen"
+  local u; u="$(first_user)"
+  if [[ -n "$u" ]]; then link_uri "$u" --ws; fi
+}
+
+cmd_ws_disable() {
+  need_state
+  jq '.server.ws.enabled = false' "$STATE" | save_state
+  build_base
+  rebuild
+  info "WebSocket выключен"
+}
+
+first_user() {
+  jq -r '.users | keys | first // empty' "$STATE"
+}
+
 cmd_status() {
   need_state
   echo "узел:      $(jq -r '.server.host' "$STATE"):$(jq -r '.server.port' "$STATE")"
   echo "маска:     $(jq -r '.server.dest_domain' "$STATE")"
   echo "XHTTP:     $(jq -r '.server.xhttp.enabled' "$STATE") на $(jq -r '.server.xhttp.port' "$STATE")/tcp"
+  if [[ "$(jq -r '.server.ws.enabled // false' "$STATE")" == "true" ]]; then
+    echo "WebSocket: $(jq -r '.server.ws.host' "$STATE"):$(jq -r '.server.ws.port' "$STATE")$(jq -r '.server.ws.path' "$STATE")"
+  else
+    echo "WebSocket: выключен"
+  fi
   echo "users:     $(jq '.users | length' "$STATE") всего, $(jq '[.users[]|select(.enabled)]|length' "$STATE") активных"
   if command -v systemctl >/dev/null; then
     printf 'xray:      %s\n' "$(systemctl is-active xray 2>/dev/null || echo 'n/a')"
@@ -482,6 +567,8 @@ doss — управление пользователями
   doss tick                    отключить истёкшие/перебравшие лимит
   doss build-base              пересобрать шаблон конфига из state.json
   doss rebuild                 применить пользователей к конфигу Xray
+  doss ws-enable --host <домен> [--port 443] [--path /doss-ws] [--listen 8080]
+  doss ws-disable              выключить WebSocket-транспорт
   doss status | keys | export
 EOF
 }
@@ -502,6 +589,8 @@ main() {
     qr)      cmd_qr "$@" ;;
     sub)     cmd_sub "$@" ;;
     build-base) build_base ;;
+    ws-enable)  cmd_ws_enable "$@" ;;
+    ws-disable) cmd_ws_disable ;;
     tick)    cmd_tick ;;
     traffic) cmd_traffic "$@" ;;
     rebuild) rebuild; info "конфиг пересобран" ;;

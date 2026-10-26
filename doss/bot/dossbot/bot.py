@@ -45,6 +45,10 @@ def main_kb() -> InlineKeyboardMarkup:
     ])
 
 
+def _shared(cfg: Config) -> bool:
+    return getattr(cfg, "provider", "") == "link"
+
+
 def _days_left(expires: str | None) -> str:
     if not expires:
         return "бессрочно"
@@ -58,7 +62,11 @@ def _days_left(expires: str | None) -> str:
     return f"до {expires} (осталось {left} дн.)"
 
 
-def access_text(acc) -> str:
+def access_text(acc, shared: bool = False) -> str:
+    note = (
+        "\n<i>Общий ключ: лимиты и срок считаются на стороне сервиса, "
+        "доступ один на всех.</i>\n" if shared else ""
+    )
     return (
         "🔑 <b>Твой доступ Doss</b>\n\n"
         f"Срок: {_days_left(acc.expires)}\n"
@@ -66,6 +74,7 @@ def access_text(acc) -> str:
         "<b>Ссылка для клиента</b> (нажми, чтобы скопировать):\n"
         f"<code>{html.escape(acc.link)}</code>\n\n"
         "Дальше: Hiddify → «+» → «Импорт из буфера»."
+        + note
     )
 
 
@@ -115,7 +124,7 @@ async def cmd_me(message: Message, svc: SubscriptionService) -> None:
     except NotAllowed:
         await message.answer("Подписки пока нет. Возьми триал 🎁", reply_markup=main_kb())
         return
-    await message.answer(access_text(acc))
+    await message.answer(access_text(acc, shared=_shared(cfg)))
 
 
 @router.message(Command("trial"))
@@ -150,7 +159,7 @@ async def on_menu(cb: CallbackQuery, cfg: Config, svc: SubscriptionService) -> N
         except NotAllowed:
             await cb.message.answer("Подписки пока нет. Возьми триал 🎁", reply_markup=main_kb())
             return
-        await cb.message.answer(access_text(acc))
+        await cb.message.answer(access_text(acc, shared=_shared(cfg)))
     else:
         await cb.message.answer(APPS_HELP)
 
