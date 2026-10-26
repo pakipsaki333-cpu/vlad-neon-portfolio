@@ -33,9 +33,11 @@
 
 ## Как запустить (Windows 10/11)
 
-**Вариант 1 — готовый exe.** Скачай `SeaBattleHelper.exe` со страницы
-[Releases](../../releases) (или из артефактов сборки в Actions → «seabattle · тесты и сборка exe»)
-и запусти. Устанавливать ничего не нужно. Windows может предупредить про неизвестного
+**Вариант 1 — готовый exe.** Скачай
+[`SeaBattleHelper.exe`](https://github.com/pakipsaki333-cpu/vlad-neon-portfolio/releases/download/seabattle-v1.0.0/SeaBattleHelper.exe)
+(страница релиза: [seabattle-v1.0.0](https://github.com/pakipsaki333-cpu/vlad-neon-portfolio/releases/tag/seabattle-v1.0.0);
+свежие сборки — в [Actions](https://github.com/pakipsaki333-cpu/vlad-neon-portfolio/actions/workflows/seabattle-build.yml),
+артефакт `SeaBattleHelper-windows`) и запусти. Устанавливать ничего не нужно. Windows может предупредить про неизвестного
 издателя — «Подробнее → Выполнить в любом случае».
 
 **Вариант 2 — из исходников.** Нужен [Python](https://www.python.org/downloads/) 3.10–3.14

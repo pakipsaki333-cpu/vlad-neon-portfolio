@@ -10,6 +10,8 @@ on:
   pull_request:
     paths:
       - "seabattle-helper/**"
+  release:
+    types: [published]        # релиз с тегом seabattle-v* → exe собирается и прикрепляется к нему
   workflow_dispatch:
 
 concurrency:
@@ -19,13 +21,14 @@ concurrency:
 jobs:
   tests:
     name: тесты (Linux)
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'seabattle-')
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: seabattle-helper
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Зависимости
@@ -42,8 +45,8 @@ jobs:
       run:
         working-directory: seabattle-helper
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Зависимости
@@ -85,17 +88,34 @@ jobs:
             Write-Output "::notice title=SeaBattleHelper.exe::размер $mb МБ"
           }
       - name: exe
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: SeaBattleHelper-windows
           path: seabattle-helper/dist/SeaBattleHelper.exe
           if-no-files-found: error
       - name: Отчёты самопроверки и скриншоты
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: selftest-reports
           path: |
             seabattle-helper/selftest_src
             seabattle-helper/selftest_exe
           if-no-files-found: ignore
+
+  release-asset:
+    name: exe в релиз
+    if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'seabattle-')
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: SeaBattleHelper-windows
+          path: dist
+      - name: Прикрепить SeaBattleHelper.exe к релизу
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/SeaBattleHelper.exe --clobber --repo "${{ github.repository }}"
