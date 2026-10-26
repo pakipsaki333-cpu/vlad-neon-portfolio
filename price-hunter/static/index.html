@@ -38,7 +38,11 @@ label{display:block;font-size:13px;color:var(--mut);margin:14px 0 5px;font-weigh
 input,select,textarea{width:100%;background:#0b0b1c;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px;font-size:14px}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}.empty{padding:36px;text-align:center;color:var(--mut);background:var(--panel);border:1px dashed var(--line);border-radius:16px}
 canvas.hist{width:100%;height:120px;background:#0b0b1c;border-radius:10px;margin-top:10px}
-@media(max-width:760px){.card{grid-template-columns:84px 1fr}.right{grid-column:1/-1;align-items:stretch;text-align:left}.ph{width:84px;height:100px}}
+.help{color:var(--mut);font-size:12px;line-height:1.45;margin:4px 0 8px}
+.lowbar{display:grid;grid-template-columns:minmax(220px,1fr) 150px auto;gap:12px;align-items:end}
+.lowopts{display:flex;flex-wrap:wrap;gap:16px;align-items:center;margin:10px 0}
+.card.best{border-color:var(--green);box-shadow:0 0 22px rgba(43,255,136,.25)}
+@media(max-width:760px){.card{grid-template-columns:84px 1fr}.right{grid-column:1/-1;align-items:stretch;text-align:left}.ph{width:84px;height:100px}.lowbar{grid-template-columns:1fr}}
 </style></head><body>
 <header>
  <div class="logo">🎯 PRICE <span>HUNTER</span></div>
@@ -62,6 +66,25 @@ canvas.hist{width:100%;height:120px;background:#0b0b1c;border-radius:10px;margin
   <div class="kpi"><small>Сканирований</small><b id="kScans">—</b></div>
   <div class="kpi"><small>Снапшотов цен</small><b id="kSnaps">—</b></div>
  </div>
+ <section style="background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:18px;margin:24px 0">
+  <h2 style="margin-top:0">🔎 Самая низкая цена товара</h2>
+  <p class="mut" style="line-height:1.55">Отдельный ручной поиск: введи бренд, точную модель и вариант, например «iPhone 15 128 ГБ». Панель запросит выбранные WB/Ozon сейчас, отсечёт явные аксессуары и покажет предложения от самой низкой текущей цены. Это не алерт детектора: перед покупкой проверь вариант, продавца, доставку и цену в корзине.</p>
+  <div class="lowbar">
+   <div><label style="margin-top:0" for="lowQuery">Товар / модель</label><input id="lowQuery" placeholder="Например: Sony WH-1000XM5"></div>
+   <div><label style="margin-top:0" for="lowPages">Страниц выдачи</label><select id="lowPages"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select></div>
+   <button class="btn" id="btnLowest">Найти минимум</button>
+  </div>
+  <div class="lowopts">
+   <span><input id="lowWb" type="checkbox" checked style="width:auto"> 🟣 WB</span>
+   <span><input id="lowOzon" type="checkbox" checked style="width:auto"> 🔵 Ozon</span>
+   <span><input id="lowStrict" type="checkbox" style="width:auto"> Только точные совпадения</span>
+   <span><input id="lowRecord" type="checkbox" checked style="width:auto"> Записывать показанные цены в свою историю</span>
+  </div>
+  <div class="help">Пояснения: больше страниц — шире поиск, но дольше и выше риск антибота. «Только точные» скрывает близкие варианты без всех важных слов запроса. Запись в историю сохраняет показанные цены для будущих медиан/минимумов, но не создаёт находку и не шлёт Telegram.</div>
+  <div id="lowSummary" style="font-weight:800;line-height:1.5;margin:10px 0"></div>
+  <div id="lowStatus" class="mut" style="line-height:1.5;margin-bottom:10px">Здесь появится самая низкая текущая цена и список предложений.</div>
+  <div id="lowResults"></div>
+ </section>
  <h2>🔥 Находки <span class="mut" style="font-size:14px">— сортировка по свежести. Красная рамка = вероятная ошибка цены, действовать немедленно.</span></h2>
  <div id="feed"><div class="empty">Сканируем включённые WB и Ozon… Первая находка появится после первого прохода. В LIVE-режиме детектор точнее с каждым часом — он накапливает отдельную историю цен по каждой площадке и отличает настоящие падения от фейковых «скидок» продавцов.</div></div>
  <h2>🧾 Журнал сканирований</h2>
@@ -72,41 +95,45 @@ canvas.hist{width:100%;height:120px;background:#0b0b1c;border-radius:10px;margin
 
 <div class="modal" id="settingsModal"><div class="sheet">
  <h2 style="margin-top:0">⚙️ Настройки охотника</h2>
- <label>Режим (auto = живые WB/Ozon; demo только если недоступны все включённые)</label>
+ <label>Режим</label>
  <select id="sMode"><option value="auto">auto</option><option value="live">live — только настоящие WB/Ozon</option><option value="demo">demo — симуляция</option></select>
+ <div class="help">ℹ auto работает в LIVE, пока отвечает хотя бы одна включённая площадка, и уходит в DEMO только если недоступны все. live никогда не подменяет настоящие товары симуляцией. demo нужен только для проверки интерфейса и Telegram.</div>
  <label>Маркетплейсы</label>
  <div style="display:flex;gap:22px;flex-wrap:wrap">
   <span><input id="sWbEnabled" type="checkbox" style="width:auto"> 🟣 Wildberries</span>
   <span><input id="sOzonEnabled" type="checkbox" style="width:auto"> 🔵 Ozon</span>
  </div>
- <label>Поисковые запросы (каждый с новой строки) — общие для WB и Ozon; выбирай ликвидные категории, где ошибку легко перепродать/использовать</label>
+ <div class="help">ℹ Источники независимы и чередуются по запросам: сбой одной площадки не отменяет товары и историю другой. Должен быть включён хотя бы один маркетплейс.</div>
+ <label>Поисковые запросы (каждый с новой строки)</label>
  <textarea id="sQueries" rows="7"></textarea>
+ <div class="help">ℹ Запросы общие для WB и Ozon и выполняются в каждом проходе, поэтому их количество влияет на скорость и риск антибота. Выбирай ликвидные товары; точный бренд + модель даёт меньше шума, общая категория — шире охват.</div>
  <div class="grid2">
-  <div><label>Интервал сканирования, сек (минимум 60)</label><input id="sInterval" type="number"></div>
-  <div><label>Страниц на запрос</label><input id="sPages" type="number"></div>
-  <div><label>Мин. скидка карточки, % (только смешанный режим)</label><input id="sMinDisc" type="number"></div>
-  <div><label>Мин. падение vs истории, %</label><input id="sMinDrop" type="number"></div>
-  <div><label>Мин. обычная цена по истории, ₽</label><input id="sMinPrice" type="number"></div>
-  <div><label>Мин. выгода, ₽</label><input id="sMinSaving" type="number"></div>
-  <div><label>Транспорт WB (auto — httpx → curl_cffi → Chrome/Edge)</label><select id="sWbTransport"><option value="auto">auto</option><option value="chrome">chrome (настоящий браузер/CDP)</option><option value="browser">browser (curl_cffi Chrome)</option><option value="httpx">httpx (обычный)</option></select></div>
-  <div><label>Пауза WB, сек</label><input id="sWbDelay" type="number" step="0.1" min="0.5" max="10"></div>
-  <div><label>Транспорт Ozon (при 403/307 выбирай chrome)</label><select id="sOzonTransport"><option value="auto">auto</option><option value="chrome">chrome (настоящий браузер/CDP)</option><option value="browser">browser (curl_cffi Chrome)</option><option value="httpx">httpx (обычный)</option></select></div>
-  <div><label>Пауза Ozon, сек (рекомендуется 2–3+)</label><input id="sOzonDelay" type="number" step="0.1" min="1" max="10"></div>
-  <div><label><input id="sWbBrowserFallback" type="checkbox" style="width:auto"> WB: браузерный fallback в auto</label></div>
-  <div><label><input id="sOzonBrowserFallback" type="checkbox" style="width:auto"> Ozon: браузерный fallback в auto</label></div>
-  <div><label><input id="sHistoryOnly" type="checkbox" style="width:auto"> Алерты только по падению vs истории цены</label></div>
-  <div><label><input id="sVerifyHistory" type="checkbox" style="width:auto"> Внешняя история WB, пока своей мало</label></div>
+  <div><label>Интервал сканирования, сек (минимум 60)</label><input id="sInterval" type="number"><div class="help">ℹ Пауза после полного прохода. Для браузерного DOM спокойнее 600+ сек: меньше риск 403/429.</div></div>
+  <div><label>Страниц на запрос</label><input id="sPages" type="number"><div class="help">ℹ Глубина выдачи по каждому запросу и сортировке. Больше — шире охват, но проход дольше.</div></div>
+  <div><label>Мин. скидка карточки, % (только смешанный режим)</label><input id="sMinDisc" type="number"><div class="help">ℹ В history-only не работает: скидка продавца сама не создаёт алерт. В смешанном режиме это минимальный процент зачёркнутой цены.</div></div>
+  <div><label>Мин. падение vs истории, %</label><input id="sMinDrop" type="number"><div class="help">ℹ Главный порог: текущая цена должна быть ниже медианы истории этого товара минимум на столько процентов.</div></div>
+  <div><label>Мин. обычная цена по истории, ₽</label><input id="sMinPrice" type="number"><div class="help">ℹ Отсекает мелочь: медиана обычной цены товара должна быть не ниже этой суммы.</div></div>
+  <div><label>Мин. выгода, ₽</label><input id="sMinSaving" type="number"><div class="help">ℹ Минимальная разница между медианой истории и текущей ценой. Подними, если находки формально дешёвые, но невыгодные.</div></div>
+  <div><label>Транспорт WB</label><select id="sWbTransport"><option value="auto">auto</option><option value="chrome">chrome (настоящий браузер/CDP)</option><option value="browser">browser (curl_cffi Chrome)</option><option value="httpx">httpx (обычный)</option></select><div class="help">ℹ auto: httpx → curl_cffi → настоящий Chrome/Edge. Если диагностика показывает работу только через chrome-dom, выбирай chrome сразу.</div></div>
+  <div><label>Пауза WB, сек</label><input id="sWbDelay" type="number" step="0.1" min="0.5" max="10"><div class="help">ℹ Задержка между запросами WB. При блоках/429 увеличь до 2–3 сек.</div></div>
+  <div><label>Транспорт Ozon</label><select id="sOzonTransport"><option value="auto">auto</option><option value="chrome">chrome (настоящий браузер/CDP)</option><option value="browser">browser (curl_cffi Chrome)</option><option value="httpx">httpx (обычный)</option></select><div class="help">ℹ При 403/307 выбирай chrome: запросы пойдут внутри настоящей вкладки Ozon, при необходимости — через отрисованный DOM.</div></div>
+  <div><label>Пауза Ozon, сек (рекомендуется 2–3+)</label><input id="sOzonDelay" type="number" step="0.1" min="1" max="10"><div class="help">ℹ Задержка между запросами Ozon. Ozon строже WB, поэтому не опускай без необходимости.</div></div>
+  <div><label><input id="sWbBrowserFallback" type="checkbox" style="width:auto"> WB: браузерный fallback в auto</label><div class="help">ℹ Разрешает auto открыть настоящий Chrome/Edge, если обычные запросы WB заблокированы.</div></div>
+  <div><label><input id="sOzonBrowserFallback" type="checkbox" style="width:auto"> Ozon: браузерный fallback в auto</label><div class="help">ℹ Разрешает auto перейти в настоящий браузер при блоке Ozon.</div></div>
+  <div><label><input id="sHistoryOnly" type="checkbox" style="width:auto"> Алерты только по падению vs истории цены</label><div class="help">ℹ Рекомендуется включено: без надёжной истории алерта не будет. Выключение возвращает шумный смешанный режим по скидке карточки.</div></div>
+  <div><label><input id="sVerifyHistory" type="checkbox" style="width:auto"> Внешняя история WB, пока своей мало</label><div class="help">ℹ Для новых WB-товаров использует внешнюю медиану/минимум WB, пока собственная база не накопила минимум три наблюдения. У Ozon такой внешней истории нет.</div></div>
  </div>
  <h3>✈️ Telegram</h3>
  <p class="mut">1) @BotFather → /newbot → токен. 2) Напиши боту /start. 3) Chat id: @userinfobot. Инструкция целиком — в README.</p>
- <label>Токен бота <span id="tokHint"></span></label><input id="sTgToken" type="password" placeholder="123456:AA… (пусто = не менять)">
- <label>Chat ID</label><input id="sTgChat" placeholder="например 123456789">
+ <label>Токен бота <span id="tokHint"></span></label><input id="sTgToken" type="password" placeholder="123456:AA… (пусто = не менять)"><div class="help">ℹ Секретный ключ бота от @BotFather. Пустое поле при сохранении оставляет старый токен; никому его не отправляй.</div>
+ <label>Chat ID</label><input id="sTgChat" placeholder="например 123456789"><div class="help">ℹ Числовой ID чата от @userinfobot. Сначала открой своего бота и нажми /start, иначе он не сможет тебе написать.</div>
  <div style="display:flex;gap:10px;margin-top:20px;flex-wrap:wrap">
   <button class="btn" id="btnSave">💾 Сохранить</button>
   <button class="btn2" id="btnTgTest">✈️ Тест Telegram</button>
   <button class="btn2" id="btnClose">Закрыть</button>
   <span id="setMsg" class="mut"></span>
  </div>
+ <div class="help">ℹ Настройки применяются только после «Сохранить». После смены режима, площадок или транспортов следующий проход заново проверит источники.</div>
 </div></div>
 
 <script>
@@ -163,6 +190,31 @@ async function showHist(nm,id,marketplace='wb'){const el=$('hist-'+id);const {hi
  const ps=history.map(h=>h.sale_price),mn=Math.min(...ps),mx=Math.max(...ps),rg=(mx-mn)||1;
  x.strokeStyle='#00f0ff';x.lineWidth=2;x.beginPath();history.forEach((h,i)=>{const px=10+i*(620/(history.length-1)),py=105-((h.sale_price-mn)/rg)*90;i?x.lineTo(px,py):x.moveTo(px,py)});x.stroke();
  x.fillStyle='#8b8fb3';x.font='12px sans-serif';x.fillText('min '+fmt(mn)+' · max '+fmt(mx),10,14)}
+async function lowestSearch(){
+ const q=$('lowQuery').value.trim(); const markets=[]; if($('lowWb').checked)markets.push('wb'); if($('lowOzon').checked)markets.push('ozon');
+ if(q.length<2){$('lowStatus').textContent='Введи бренд и модель товара, например: iPhone 15 128 ГБ.';return}
+ if(!markets.length){$('lowStatus').textContent='Выбери хотя бы WB или Ozon.';return}
+ const btn=$('btnLowest'), old=btn.textContent; btn.disabled=true; btn.textContent='Ищу…';
+ $('lowSummary').textContent=''; $('lowStatus').textContent='Запрашиваю выбранные площадки: сначала самые дешёвые, затем популярные. Через настоящий браузер поиск может занять до минуты…'; $('lowResults').innerHTML='';
+ try{
+  const params=new URLSearchParams({query:q,pages:$('lowPages').value,limit:'50',marketplaces:markets.join(','),strict_match:$('lowStrict').checked?'true':'false',record:$('lowRecord').checked?'true':'false'});
+  const r=await j('/api/lowest-price?'+params.toString()); const offers=r.offers||[], best=r.cheapest||offers[0];
+  if(best){const per=Object.entries(r.by_marketplace||{}).map(([m,x])=>marketLabel(m)+': '+(x.cheapest?('от '+fmt(x.cheapest.sale_price_rub)):'нет подходящих')).join(' · ');$('lowSummary').textContent='🏆 Общий минимум сейчас: '+fmt(best.sale_price_rub)+' — '+marketLabel(best)+' · '+((best.brand?best.brand+' ':'')+(best.name||''))+(per?' | '+per:'')}
+  else $('lowSummary').textContent='Подходящих предложений не найдено';
+  $('lowStatus').textContent=(r.message||'')+' Режим: '+(r.mode||r.effective_mode||'')+'; уникальных карточек получено: '+(r.total_raw||0)+'; после фильтра: '+(r.total_matched||offers.length)+'; явных аксессуаров отсечено: '+(r.excluded_accessories||0)+'.'+(r.mode==='demo'?' ⚠ Это DEMO-результаты, не настоящие товары.':'')+(r.recorded?(' В собственную историю записано: '+r.recorded+'.'):'')+((r.errors&&r.errors.length)?(' Ошибки: '+r.errors.slice(0,3).join(' | ')):'');
+  $('lowResults').innerHTML=offers.length?offers.map(a=>`<div class="card ${a.is_cheapest?'best':''}">
+    ${photo(a)}
+    <div><div class="mut">#${a.rank||''} · ${marketLabel(a)} · ${idLabel(a)} <a href="${esc(a.url)}" target="_blank" rel="noopener">${a.nm}</a> · совпадение ${esc(a.match_label||'—')} ${Math.round((a.match_score||0)*100)}% ${a.is_cheapest?'<span class="badge live">САМАЯ НИЗКАЯ</span>':''}</div>
+    <div style="font-weight:800;margin:3px 0">${a.brand?esc(a.brand)+' — ':''}${esc(a.name||'')}</div>
+    <div><span class="price">${fmt(a.sale_price_rub)}</span>${a.price_rub>a.sale_price_rub?`<span class="old">${fmt(a.price_rub)}</span><span class="disc">−${Math.round(a.discount_pct||0)}%</span>`:''}</div>
+    <div class="mut">Скидка карточки — только справка${a.above_cheapest_pct?' · дороже общего минимума на '+Math.round(a.above_cheapest_pct)+'%':' · общий минимум'}${a.own_history_median?' · медиана своей базы '+fmt(a.own_history_median):''}${a.own_history_min?' · минимум своей базы '+fmt(a.own_history_min):''}${a.rating?' · рейтинг '+Number(a.rating).toFixed(1):''}${a.feedbacks?' · отзывов '+a.feedbacks:''}</div>
+    <div class="tags"><span class="tag">перед покупкой проверь вариант, продавца и корзину</span></div></div>
+    <div class="right"><a class="btn-buy" href="${esc(a.url)}" target="_blank" rel="noopener">🛒 ОТКРЫТЬ</a></div></div>`).join(''):'<div class="empty">Ничего подходящего не нашлось. Уточни модель/вариант или сними «Только точные совпадения».</div>';
+ }catch(e){$('lowSummary').textContent='Поиск не завершился';$('lowStatus').textContent='❌ '+e.message}
+ finally{btn.disabled=false;btn.textContent=old}
+}
+$('btnLowest').onclick=lowestSearch;
+$('lowQuery').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();lowestSearch()}});
 $('btnNow').onclick=async()=>{await j('/api/scan/now',{method:'POST'});setTimeout(refresh,1200)};
 async function diagnoseMarketplace(marketplace,btnId,label){const b=$(btnId),old=b.textContent;b.disabled=true;b.textContent='Проверяю '+label+'…';try{const r=await j('/api/'+marketplace+'/diagnose',{method:'POST'});alert((r.message||'')+(r.sample?'\nПример: '+r.sample:'')+(marketplace==='wb'&&r.ok&&r.card_ok===false?'\nПоиск работает; проверка карточки WB не прошла, это некритично.':'')+(r.enabled===false?'\nВАЖНО: источник выключен в настройках — проверка отдельная, в скан он не войдёт, пока не включишь.':'')+(r.requested_mode==='demo'?'\nВАЖНО: сейчас выбран DEMO — переключи режим на live/auto и сохрани.':'')+(r.hint?'\n'+r.hint:''))}catch(e){alert('Диагностика '+label+' не удалась: '+e.message)}finally{b.disabled=false;b.textContent=old;refresh()}}
 $('btnDiag').onclick=()=>diagnoseMarketplace('wb','btnDiag','WB');

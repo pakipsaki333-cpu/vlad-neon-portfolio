@@ -104,6 +104,25 @@ class PriceHunterApp:
         self._top_run_id = -1
         self._alert_by_iid: dict[str, dict] = {}
         self.var_show_unconfirmed_alerts = tk.BooleanVar(value=False)
+        cfg0 = self.ctrl.settings.get()
+        try:
+            lowest_pages = max(1, min(3, int(cfg0.get("pages_per_query", 2) or 2)))
+        except Exception:
+            lowest_pages = 2
+        self.var_lowest_query = tk.StringVar(value="")
+        self.var_lowest_wb = tk.BooleanVar(value=bool(cfg0.get("wb_enabled", True)))
+        self.var_lowest_ozon = tk.BooleanVar(value=bool(cfg0.get("ozon_enabled", True)))
+        self.var_lowest_pages = tk.StringVar(value=str(lowest_pages))
+        self.var_lowest_strict = tk.BooleanVar(value=False)
+        self.var_lowest_record = tk.BooleanVar(value=True)
+        self.var_lowest_status = tk.StringVar(
+            value="Введи товар и нажми «Найти самую низкую цену».")
+        self.var_lowest_summary = tk.StringVar(value="")
+        self.var_lowest_details = tk.StringVar(
+            value="Здесь будут подробности выбранного предложения.")
+        self._lowest_by_iid: dict[str, dict] = {}
+        self._lowest_best: dict | None = None
+        self._lowest_searching = False
         self._toasts: list[tk.Toplevel] = []
         self._tray_hint_shown = False
         self._dialog_busy = False
@@ -119,6 +138,7 @@ class PriceHunterApp:
         self.nb.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self._build_home()
         self._build_finds()
+        self._build_lowest()
         self._build_settings()
         self._build_journal()
         self._load_settings_form()
@@ -222,9 +242,11 @@ class PriceHunterApp:
         actions = ttk.Frame(f)
         actions.pack(fill="x", pady=8)
         ttk.Button(actions, text="Настроить Telegram и пороги",
-                   command=lambda: self.nb.select(2)).pack(side="left", padx=4)
+                   command=lambda: self.nb.select(3)).pack(side="left", padx=4)
         ttk.Button(actions, text="Все находки",
                    command=lambda: self.nb.select(1)).pack(side="left", padx=4)
+        ttk.Button(actions, text="🔎 Самая низкая цена",
+                   command=lambda: self.nb.select(2)).pack(side="left", padx=4)
         ttk.Button(actions, text="Свернуть в трей",
                    command=self._hide_to_tray).pack(side="left", padx=4)
 
@@ -260,6 +282,12 @@ class PriceHunterApp:
             text="Показывать старые находки без подтверждения историей (только скидка карточки)",
             variable=self.var_show_unconfirmed_alerts,
             command=lambda: self._refresh_alerts(force=True),
+        ).pack(anchor="w", pady=(0, 2))
+        tk.Label(
+            f, bg=BG, fg=MUT, justify="left", wraplength=1100,
+            text=("ℹ Это только фильтр отображения: записи не удаляются. В строгом режиме по умолчанию "
+                  "видны находки с медианой истории и реальным падением от неё; старые записи, где "
+                  "основанием была только скидка продавца, скрыты и не считаются надёжными находками."),
         ).pack(anchor="w", pady=(0, 8))
         cols = ("time", "level", "marketplace", "name", "sale", "old",
                 "hist_min", "disc", "saving", "score")
@@ -291,6 +319,103 @@ class PriceHunterApp:
         ttk.Button(row, text="Скрыть", command=self._dismiss_selected).pack(side="left", padx=4)
         ttk.Button(row, text="↻ Обновить", command=lambda: self._refresh_alerts(force=True)).pack(side="left", padx=4)
 
+    # ----------------------- Самая низкая цена ---------------------- #
+    def _build_lowest(self):
+        f = self._tab("Самая низкая цена")
+        tk.Label(
+            f, bg=BG, fg=TEXT, justify="left", wraplength=1100,
+            font=("Segoe UI", 11, "bold"),
+            text="Отдельный ручной поиск самого дешёвого текущего предложения на WB и Ozon",
+        ).pack(anchor="w", pady=(0, 4))
+        tk.Label(
+            f, bg=BG, fg=MUT, justify="left", wraplength=1100,
+            text=("Введи максимально точный товар: бренд + модель + вариант, "
+                  "например «iPhone 15 128 ГБ» или «Sony WH-1000XM5». Это не "
+                  "детектор ценовых ошибок и не Telegram-алерт: вкладка просто "
+                  "запрашивает выбранные площадки сейчас, отсекает явные "
+                  "аксессуары и сортирует подходящие карточки по текущей цене. "
+                  "Перед покупкой всё равно проверь вариант, продавца, доставку "
+                  "и итоговую цену в корзине."),
+        ).pack(anchor="w", pady=(0, 8))
+
+        form = ttk.Frame(f)
+        form.pack(fill="x", pady=4)
+        tk.Label(form, text="Товар / модель", bg=BG, fg=MUT,
+                 font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 8))
+        entry = ttk.Entry(form, textvariable=self.var_lowest_query, width=58)
+        entry.pack(side="left", padx=4)
+        entry.bind("<Return>", lambda _e: self._start_lowest_search())
+        self.btn_lowest_search = ttk.Button(
+            form, text="🔎 Найти самую низкую цену", style="Accent.TButton",
+            command=self._start_lowest_search)
+        self.btn_lowest_search.pack(side="left", padx=8)
+
+        options = ttk.Frame(f)
+        options.pack(fill="x", pady=4)
+        tk.Label(options, text="Площадки:", bg=BG, fg=MUT,
+                 font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 6))
+        ttk.Checkbutton(options, text="🟣 WB",
+                        variable=self.var_lowest_wb).pack(side="left", padx=4)
+        ttk.Checkbutton(options, text="🔵 Ozon",
+                        variable=self.var_lowest_ozon).pack(side="left", padx=4)
+        tk.Label(options, text="Страниц:", bg=BG, fg=MUT,
+                 font=("Segoe UI", 10, "bold")).pack(side="left", padx=(18, 4))
+        ttk.Combobox(options, textvariable=self.var_lowest_pages,
+                     values=["1", "2", "3"], state="readonly", width=5
+                     ).pack(side="left", padx=4)
+        ttk.Checkbutton(options, text="Только точные совпадения",
+                        variable=self.var_lowest_strict).pack(side="left", padx=10)
+        ttk.Checkbutton(options, text="Записывать цены в историю базы",
+                        variable=self.var_lowest_record).pack(side="left", padx=4)
+        tk.Label(
+            f, bg=BG, fg=MUT, justify="left", wraplength=1100,
+            text=("Пояснения: «Страниц» — глубина выдачи на каждой площадке и "
+                  "в каждой сортировке; больше страниц = шире поиск, но дольше "
+                  "и выше риск антибота. «Только точные» не показывает близкие "
+                  "варианты, если в карточке нет всех важных слов запроса. "
+                  "«Записывать цены» добавляет показанные предложения в "
+                  "собственную историю Price Hunter, но не создаёт находок и "
+                  "не отправляет Telegram."),
+        ).pack(anchor="w", pady=(0, 6))
+
+        tk.Label(f, textvariable=self.var_lowest_summary, bg=BG, fg=GREEN,
+                 font=("Segoe UI", 12, "bold"), wraplength=1100,
+                 justify="left", anchor="w").pack(fill="x", pady=2)
+        tk.Label(f, textvariable=self.var_lowest_status, bg=BG, fg=MUT,
+                 wraplength=1100, justify="left", anchor="w"
+                 ).pack(fill="x", pady=(0, 6))
+
+        cols = ("rank", "marketplace", "name", "sale", "old", "rating",
+                "match", "db_min", "id")
+        self.tree_lowest = ttk.Treeview(
+            f, columns=cols, show="headings", height=15)
+        for col, title, width in [
+                ("rank", "№", 42), ("marketplace", "Площадка", 95),
+                ("name", "Товар", 285), ("sale", "Текущая цена", 112),
+                ("old", "Цена карточки", 142), ("rating", "Рейтинг / отзывы", 125),
+                ("match", "Совпадение", 105),
+                ("db_min", "Минимум в своей базе", 132),
+                ("id", "Арт. / SKU", 112)]:
+            self.tree_lowest.heading(col, text=title)
+            self.tree_lowest.column(
+                col, width=width, anchor="w" if col == "name" else "center")
+        self.tree_lowest.tag_configure("cheapest", foreground=GREEN)
+        self.tree_lowest.tag_configure("market_best", foreground=NEON)
+        self.tree_lowest.pack(fill="both", expand=True)
+        self.tree_lowest.bind("<<TreeviewSelect>>", self._on_select_lowest)
+        self.tree_lowest.bind("<Double-Button-1>",
+                              lambda _e: self._open_lowest_selected())
+
+        tk.Label(f, textvariable=self.var_lowest_details, bg=BG, fg=MUT,
+                 wraplength=1100, justify="left", anchor="w"
+                 ).pack(fill="x", pady=6)
+        row = ttk.Frame(f)
+        row.pack(fill="x")
+        ttk.Button(row, text="Открыть самое дешёвое", style="Accent.TButton",
+                   command=self._open_lowest_best).pack(side="left", padx=4)
+        ttk.Button(row, text="Открыть выбранное",
+                   command=self._open_lowest_selected).pack(side="left", padx=4)
+
     # ------------------------------ Настройки ------------------------- #
     def _scrollable_tab(self, title: str) -> tk.Frame:
         outer = self._tab(title)
@@ -314,12 +439,23 @@ class PriceHunterApp:
         return lf
 
     def _field(self, parent, row: int, label: str, var: tk.Variable,
-               width: int = 18, show: str | None = None) -> ttk.Entry:
+               width: int = 18, show: str | None = None,
+               help_text: str = "") -> ttk.Entry:
         tk.Label(parent, text=label, bg=PANEL, fg=MUT,
                  font=("Segoe UI", 9, "bold")).grid(row=row, column=0, sticky="w", pady=3, padx=(0, 8))
         e = ttk.Entry(parent, textvariable=var, width=width, show=show or "")
         e.grid(row=row, column=1, sticky="w", pady=3)
+        if help_text:
+            self._setting_help(parent, row, help_text)
         return e
+
+    def _setting_help(self, parent, row: int, text: str, column: int = 2,
+                      columnspan: int = 1, wraplength: int = 650):
+        return tk.Label(
+            parent, text=f"ℹ {text}", bg=PANEL, fg=MUT,
+            wraplength=wraplength, justify="left",
+        ).grid(row=row, column=column, columnspan=columnspan,
+               sticky="w", pady=3, padx=8)
 
     def _svar(self, key: str, value: str = "") -> tk.StringVar:
         var = tk.StringVar(value=value)
@@ -337,15 +473,22 @@ class PriceHunterApp:
         tg = self._section(f, "Telegram — куда слать алерты")
         ttk.Checkbutton(tg, text="Telegram включён",
                         variable=self._bvar("telegram_enabled", True)).grid(row=0, column=0, sticky="w", columnspan=2)
-        self.ent_token = self._field(tg, 1, "Токен бота (@BotFather)",
-                                     self._svar("telegram_token"), width=52, show="*")
+        self._setting_help(
+            tg, 0, "Если выключено, находки только сохраняются в приложении; мгновенные сообщения в Telegram не отправляются.")
+        self.ent_token = self._field(
+            tg, 1, "Токен бота (@BotFather)",
+            self._svar("telegram_token"), width=52, show="*",
+            help_text="Секретный ключ твоего бота. Пустое поле при сохранении оставляет ранее сохранённый токен; никому его не отправляй.")
         self.var_token_hint = tk.StringVar(value="")
-        tk.Label(tg, textvariable=self.var_token_hint, bg=PANEL, fg=MUT).grid(row=1, column=2, sticky="w", padx=8)
+        tk.Label(tg, textvariable=self.var_token_hint, bg=PANEL, fg=MUT).grid(row=2, column=2, sticky="w", padx=8)
         show_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(tg, text="Показать токен", variable=show_var,
                         command=lambda: self.ent_token.configure(
                             show="" if show_var.get() else "*")).grid(row=2, column=1, sticky="w")
-        self._field(tg, 3, "Chat ID (@userinfobot)", self._svar("telegram_chat_id"), width=30)
+        self._field(
+            tg, 3, "Chat ID (@userinfobot)", self._svar("telegram_chat_id"),
+            width=30,
+            help_text="Числовой ID чата, куда бот пришлёт ссылку на товар. Сначала открой своего бота и нажми /start, иначе Telegram не даст ему написать.")
         tk.Label(tg, bg=PANEL, fg=MUT, justify="left", wraplength=980,
                  text="1) @BotFather → /newbot → токен. 2) Открой бота и нажми /start. "
                       "3) Chat ID пришлёт @userinfobot. Пустой токен при сохранении = оставить ранее сохранённый."
@@ -371,8 +514,12 @@ class PriceHunterApp:
                         variable=self._bvar("ozon_enabled", True)).pack(side="left", padx=6)
         tk.Label(markets_row, text="Источники независимы: падение одного не отменяет товары другого",
                  bg=PANEL, fg=MUT).pack(side="left", padx=8)
-        self._field(sc, 2, "Интервал, сек (минимум 60)", self._svar("interval_sec"))
-        self._field(sc, 3, "Страниц на запрос", self._svar("pages_per_query"))
+        self._field(
+            sc, 2, "Интервал, сек (минимум 60)", self._svar("interval_sec"),
+            help_text="Пауза после полного прохода всех запросов. Меньше — быстрее заметишь падение, но выше нагрузка и риск антибота; для Chrome/DOM спокойнее 600+ сек.")
+        self._field(
+            sc, 3, "Страниц на запрос", self._svar("pages_per_query"),
+            help_text="Сколько страниц выдачи читать по каждому запросу и сортировке. Больше — шире охват, но проход дольше и запросов к площадке заметно больше.")
         tk.Label(sc, text="Сортировки выдачи", bg=PANEL, fg=MUT,
                  font=("Segoe UI", 9, "bold")).grid(row=4, column=0, sticky="w", pady=3, padx=(0, 8))
         sorts_row = tk.Frame(sc, bg=PANEL)
@@ -381,9 +528,14 @@ class PriceHunterApp:
                          ("sort_benefit", "benefit — по выгоде"),
                          ("sort_priceup", "priceup — сначала дешёвые")]:
             ttk.Checkbutton(sorts_row, text=lbl, variable=self._bvar(key)).pack(side="left", padx=6)
-        self._field(sc, 5, "Регион WB (dest)", self._svar("dest"))
-        tk.Label(sc, text="−1257786 = Москва (только WB)", bg=PANEL, fg=MUT).grid(row=5, column=2, sticky="w", padx=8)
-        self._field(sc, 6, "СПП/WB Кошелёк, %", self._svar("spp"))
+        tk.Label(sorts_row, bg=PANEL, fg=MUT,
+                 text="Каждая сортировка — отдельные запросы к площадке").pack(side="left", padx=8)
+        self._field(
+            sc, 5, "Регион WB (dest)", self._svar("dest"),
+            help_text="−1257786 = Москва. Влияет на регион/цены/наличие только WB; у Ozon город выбирается в его браузерной вкладке.")
+        self._field(
+            sc, 6, "СПП/WB Кошелёк, %", self._svar("spp"),
+            help_text="Параметр WB для цен с учётом СПП/WB Кошелька в API-запросах. Не является доказательством скидки и не заменяет историю; обычно оставляют 30.")
 
         tk.Label(sc, text="Транспорт WB", bg=PANEL, fg=MUT,
                  font=("Segoe UI", 9, "bold")).grid(row=7, column=0, sticky="w", pady=3, padx=(0, 8))
@@ -395,7 +547,11 @@ class PriceHunterApp:
         ttk.Checkbutton(sc, text="WB: в auto при блоке открывать настоящий Chrome/Edge",
                         variable=self._bvar("wb_browser_fallback", True)).grid(
                             row=8, column=1, sticky="w", pady=3)
-        self._field(sc, 9, "Пауза WB, сек", self._svar("wb_request_delay_sec"))
+        self._setting_help(
+            sc, 8, "Если обычные HTTP-запросы WB получают блок, auto попробует живой браузер. Выключай только если принципиально не хочешь открывать окно браузера.")
+        self._field(
+            sc, 9, "Пауза WB, сек", self._svar("wb_request_delay_sec"),
+            help_text="Задержка между запросами к WB. При 403/429 или долгих DOM-проходах увеличь до 2–3 сек.")
 
         tk.Label(sc, text="Транспорт Ozon", bg=PANEL, fg=MUT,
                  font=("Segoe UI", 9, "bold")).grid(row=10, column=0, sticky="w", pady=3, padx=(0, 8))
@@ -407,22 +563,30 @@ class PriceHunterApp:
         ttk.Checkbutton(sc, text="Ozon: в auto при блоке открывать настоящий Chrome/Edge",
                         variable=self._bvar("ozon_browser_fallback", True)).grid(
                             row=11, column=1, sticky="w", pady=3)
-        self._field(sc, 12, "Пауза Ozon, сек", self._svar("ozon_request_delay_sec"))
-        tk.Label(sc, text="Для Ozon держи минимум 2–3 сек и 1 страницу на запрос",
-                 bg=PANEL, fg=MUT).grid(row=12, column=2, sticky="w", padx=8)
+        self._setting_help(
+            sc, 11, "Если Ozon отвечает 403/307 обычным запросам, auto перейдёт в настоящий браузер и его отдельную вкладку Ozon.")
+        self._field(
+            sc, 12, "Пауза Ozon, сек", self._svar("ozon_request_delay_sec"),
+            help_text="Задержка между запросами к Ozon. Держи минимум 2–3 сек и обычно 1 страницу на запрос: Ozon заметно строже к частоте.")
 
         self._field(sc, 13, "Путь к Chrome/Edge (необязательно)",
                     self._svar("wb_browser_path"), width=52)
         tk.Label(sc, text="Общий браузер WB+Ozon; пусто = автопоиск chrome.exe/msedge.exe",
                  bg=PANEL, fg=MUT).grid(row=13, column=2, sticky="w", padx=8)
-        self._field(sc, 14, "Порт браузера", self._svar("wb_browser_port"))
-        self._field(sc, 15, "Ожидание браузера, сек", self._svar("wb_browser_wait_sec"))
+        self._field(
+            sc, 14, "Порт браузера", self._svar("wb_browser_port"),
+            help_text="Локальный порт управления отдельным Chrome/Edge Price Hunter. Меняй только при конфликте портов; после смены перезапусти браузер приложения.")
+        self._field(
+            sc, 15, "Ожидание браузера, сек", self._svar("wb_browser_wait_sec"),
+            help_text="Сколько ждать загрузки/ответа браузерной вкладки. На медленном ПК или долгой проверке площадки увеличь; слишком большое значение замедляет проходы.")
         ttk.Checkbutton(sc, text="Скрытый браузер (headless; проверки WB/Ozon вручную не пройти)",
                         variable=self._bvar("wb_browser_headless", False)).grid(
                             row=16, column=1, sticky="w", pady=3, columnspan=2)
-        tk.Label(sc, text="WB и Ozon работают в одном отдельном профиле Price Hunter, но каждый в своей вкладке: скан одной площадки не уводит вкладку другой. Вход в аккаунты не нужен; куки никуда не отправляются; окно и обе вкладки не закрывай во время охоты",
+        tk.Label(sc, text="ℹ Видимый браузер надёжнее: можно пройти проверку площадки и выбрать город. WB и Ozon работают в одном отдельном профиле Price Hunter, но каждый в своей вкладке: скан одной площадки не уводит вкладку другой. Вход в аккаунты не нужен; куки никуда не отправляются; окно и обе вкладки не закрывай во время охоты",
                  bg=PANEL, fg=MUT, wraplength=980, justify="left").grid(row=17, column=0, columnspan=3, sticky="w", pady=3)
-        self._field(sc, 18, "Повторная проверка LIVE, сек", self._svar("live_probe_interval_sec"))
+        self._field(
+            sc, 18, "Повторная проверка LIVE, сек", self._svar("live_probe_interval_sec"),
+            help_text="Как часто заново пробовать недоступную площадку в auto, пока вторая продолжает работу. Меньше — быстрее восстановление, но больше лишних запросов к упавшему источнику.")
 
         self.var_mp_diag = tk.StringVar(value="")
         self.var_wb_diag = self.var_mp_diag
@@ -440,16 +604,35 @@ class PriceHunterApp:
 
         # Detector
         dt = self._section(f, "Детектор аномалий")
-        self._field(dt, 0, "Мин. скидка карточки (только смешанный режим), %", self._svar("min_discount_pct"))
-        self._field(dt, 1, "Мин. падение vs истории, %", self._svar("min_drop_vs_history_pct"))
-        self._field(dt, 2, "Мин. обычная цена по истории, ₽", self._svar("min_original_price_rub"))
-        self._field(dt, 3, "Мин. выгода vs истории, ₽", self._svar("min_saving_rub"))
-        self._field(dt, 4, "Мин. скор (0–100)", self._svar("min_score"))
-        self._field(dt, 5, "Кулдаун повторных алертов, ч", self._svar("alert_cooldown_hours"))
+        self._field(
+            dt, 0, "Мин. скидка карточки (только смешанный режим), %",
+            self._svar("min_discount_pct"),
+            help_text="Работает только если history-only выключен. В строгом режиме нарисованная продавцом скидка вообще не создаёт алерт и не даёт очков.")
+        self._field(
+            dt, 1, "Мин. падение vs истории, %", self._svar("min_drop_vs_history_pct"),
+            help_text="Главный порог history-only: текущая цена должна быть минимум на столько процентов ниже медианы истории этого же товара. 35% — строго; 25–30% — больше находок и шума.")
+        self._field(
+            dt, 2, "Мин. обычная цена по истории, ₽", self._svar("min_original_price_rub"),
+            help_text="Отсекает дешёвую мелочь: медиана обычной цены должна быть не ниже суммы. В history-only это цена по истории, а не зачёркнутая цена карточки.")
+        self._field(
+            dt, 3, "Мин. выгода vs истории, ₽", self._svar("min_saving_rub"),
+            help_text="Минимальная разница в рублях между медианой истории и текущей ценой. Подними, если много формально дешёвых, но невыгодных находок.")
+        self._field(
+            dt, 4, "Мин. скор (0–100)", self._svar("min_score"),
+            help_text="Финальный фильтр уверенности: падение от истории, выгода, исторический минимум и отзывы дают очки. WATCH от 35, HOT от 50, FIRE от 70.")
+        self._field(
+            dt, 5, "Кулдаун повторных алертов, ч", self._svar("alert_cooldown_hours"),
+            help_text="Сколько часов не повторять алерт по тому же товару примерно по той же цене. Новый алерт возможен раньше, если цена упала ещё примерно на 10%+.")
         ttk.Checkbutton(dt, text="Алерты только по падению vs истории цены (скидка по карточке сама не является основанием)",
                         variable=self._bvar("history_only", True)).grid(row=6, column=0, columnspan=3, sticky="w", pady=4)
+        self._setting_help(
+            dt, 7, "Рекомендуется держать включённым: без надёжной истории алерта не будет. Если выключить, вернётся шумный смешанный режим, где большая скидка карточки сама может создать находку.",
+            column=0, columnspan=3, wraplength=980)
         ttk.Checkbutton(dt, text="Использовать внешнюю историю WB, пока собственной истории базы мало",
-                        variable=self._bvar("verify_with_price_history", True)).grid(row=7, column=0, columnspan=3, sticky="w", pady=4)
+                        variable=self._bvar("verify_with_price_history", True)).grid(row=8, column=0, columnspan=3, sticky="w", pady=4)
+        self._setting_help(
+            dt, 9, "Для новых WB-товаров берёт медиану и минимум из внешнего WB price-history, пока Price Hunter не накопил минимум три своих наблюдения. У Ozon внешней истории нет — только собственная база.",
+            column=0, columnspan=3, wraplength=980)
 
         # Queries
         qs = self._section(f, "Поисковые запросы (каждый с новой строки)")
@@ -457,20 +640,29 @@ class PriceHunterApp:
                                    insertbackground=TEXT, borderwidth=0,
                                    font=("Consolas", 10))
         self.txt_queries.pack(fill="x")
-        tk.Label(qs, bg=PANEL, fg=MUT, justify="left",
-                 text="Ставь ликвид: то, что нужно самому или легко перепродать (электроника, бренды, LEGO, парфюм…)."
+        tk.Label(qs, bg=PANEL, fg=MUT, justify="left", wraplength=980,
+                 text=("ℹ Каждый запрос выполняется в каждом проходе на включённых площадках, "
+                       "поэтому список напрямую влияет на длительность сканирования и риск антибота. "
+                       "Ставь ликвид: то, что нужно самому или легко перепродать. Чем точнее запрос "
+                       "(бренд + модель), тем меньше случайных карточек; общие категории дают шире охват, но больше шума.")
                  ).pack(anchor="w", pady=3)
 
         # App
         ap = self._section(f, "Приложение")
         ttk.Checkbutton(ap, text="Закрытие окна сворачивает в трей (охота продолжается)",
                         variable=self._bvar("close_to_tray", True)).pack(anchor="w")
+        tk.Label(ap, bg=PANEL, fg=MUT, wraplength=980, justify="left",
+                 text="ℹ Если включено, крестик не завершает программу: сканирование и Telegram продолжаются из трея. Полный выход — через меню иконки в трее.").pack(anchor="w", padx=22)
         ttk.Checkbutton(ap, text="Запускаться свёрнутым в трей",
                         variable=self._bvar("start_minimized")).pack(anchor="w")
+        tk.Label(ap, bg=PANEL, fg=MUT, wraplength=980, justify="left",
+                 text="ℹ При запуске главное окно не покажется, но охота начнётся в фоне. Удобно вместе с автозапуском.").pack(anchor="w", padx=22)
         self.var_autostart = self._bvar("autostart", autostart.is_enabled())
         cb = ttk.Checkbutton(ap, text="Автозапуск с Windows",
                              variable=self.var_autostart)
         cb.pack(anchor="w")
+        tk.Label(ap, bg=PANEL, fg=MUT, wraplength=980, justify="left",
+                 text="ℹ Price Hunter будет стартовать после входа в Windows. Настройка применяется кнопкой «Сохранить настройки».").pack(anchor="w", padx=22)
         if not autostart.is_supported():
             cb.configure(state="disabled")
             tk.Label(ap, text="(автозапуск доступен в Windows-сборке)", bg=PANEL, fg=MUT).pack(anchor="w")
@@ -483,6 +675,12 @@ class PriceHunterApp:
         self.var_saved = tk.StringVar(value="")
         tk.Label(row, textvariable=self.var_saved, bg=BG, fg=GREEN,
                  font=("Segoe UI", 10, "bold")).pack(side="left", padx=10)
+        tk.Label(
+            f, bg=BG, fg=MUT, wraplength=1050, justify="left", anchor="w",
+            text=("ℹ Изменения настроек применяются только после «Сохранить настройки». "
+                  "«Сбросить форму» возвращает в поля уже сохранённые значения, но не меняет файл настроек. "
+                  "После смены режима, площадок или транспортов следующий проход заново проверит источники."),
+        ).pack(fill="x", pady=(0, 12))
 
     # ------------------------------ Журнал ---------------------------- #
     def _build_journal(self):
@@ -737,6 +935,188 @@ class PriceHunterApp:
         sel = self.lb_recent.curselection()
         if sel and sel[0] < len(self._recent_urls):
             webbrowser.open(self._recent_urls[sel[0]])
+
+    def _start_lowest_search(self):
+        if self._lowest_searching:
+            return
+        query = self.var_lowest_query.get().strip()
+        marketplaces = []
+        if self.var_lowest_wb.get():
+            marketplaces.append("wb")
+        if self.var_lowest_ozon.get():
+            marketplaces.append("ozon")
+        if len(query) < 2:
+            self._info_dialog(
+                "Самая низкая цена",
+                "Введи бренд и модель товара, например: iPhone 15 128 ГБ.",
+                warn=True)
+            return
+        if not marketplaces:
+            self._info_dialog(
+                "Самая низкая цена", "Выбери хотя бы WB или Ozon.", warn=True)
+            return
+        try:
+            pages = max(1, min(3, int(self.var_lowest_pages.get() or 2)))
+        except Exception:
+            pages = 2
+        strict = bool(self.var_lowest_strict.get())
+        record = bool(self.var_lowest_record.get())
+        self._lowest_searching = True
+        self.btn_lowest_search.configure(state="disabled")
+        labels = " + ".join(_marketplace_label(m) for m in marketplaces)
+        self.var_lowest_summary.set("")
+        self.var_lowest_status.set(
+            f"Ищу «{query}» на {labels}: сначала самые дешёвые, затем популярные; "
+            f"страниц: {pages}. Используются сохранённые транспорты, регион и паузы…")
+        self.var_lowest_details.set("Поиск может занять от нескольких секунд до минуты, особенно через настоящий Chrome/Edge.")
+
+        def work():
+            try:
+                result = self.ctrl.find_lowest_prices(
+                    query, marketplaces=marketplaces, pages=pages,
+                    strict_match=strict, record=record)
+                self.root.after(0, lambda result=result: self._apply_lowest_result(result))
+            except Exception as e:
+                self.root.after(0, lambda e=e: self._apply_lowest_error(str(e)))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_lowest_error(self, text: str):
+        self._lowest_searching = False
+        self.btn_lowest_search.configure(state="normal")
+        self.var_lowest_summary.set("Поиск не завершился")
+        self.var_lowest_status.set(text)
+        self._info_dialog("Самая низкая цена", text, warn=True)
+
+    def _apply_lowest_result(self, result: dict):
+        self._lowest_searching = False
+        self.btn_lowest_search.configure(state="normal")
+        offers = list(result.get("offers") or [])
+        cheapest = result.get("cheapest") or (offers[0] if offers else None)
+        self._lowest_best = cheapest
+        self.tree_lowest.delete(*self.tree_lowest.get_children())
+        self._lowest_by_iid = {}
+        seen_market_best: set[str] = set()
+        for offer in offers:
+            marketplace = _marketplace_of(offer)
+            iid = f"lowest-{marketplace}-{offer.get('nm')}"
+            self._lowest_by_iid[iid] = offer
+            basic = float(offer.get("price_rub") or offer.get("sale_price_rub") or 0)
+            sale = float(offer.get("sale_price_rub") or 0)
+            discount = float(offer.get("discount_pct") or 0)
+            old_text = (f"{fmt_rub(basic)} (−{discount:.0f}%)"
+                        if basic > sale and discount > 0 else fmt_rub(basic))
+            rating = offer.get("rating") or 0
+            feedbacks = offer.get("feedbacks") or 0
+            rating_text = (f"{float(rating):.1f} · {feedbacks}" if rating
+                           else (str(feedbacks) if feedbacks else "—"))
+            match_text = (f"{offer.get('match_label') or '—'} · "
+                          f"{float(offer.get('match_score') or 0) * 100:.0f}%")
+            tags: tuple[str, ...] = ()
+            if offer is cheapest or offer.get("is_cheapest"):
+                tags = ("cheapest",)
+            elif marketplace not in seen_market_best:
+                tags = ("market_best",)
+            seen_market_best.add(marketplace)
+            self.tree_lowest.insert(
+                "", "end", iid=iid, tags=tags, values=(
+                    offer.get("rank") or "",
+                    _marketplace_label(marketplace),
+                    f"{offer.get('brand', '')} {offer.get('name', '')}".strip()[:76],
+                    fmt_rub(sale), old_text, rating_text, match_text,
+                    (fmt_rub(float(offer["own_history_min"]))
+                     if offer.get("own_history_min") else "—"),
+                    offer.get("nm") or "",
+                ))
+
+        by_market = result.get("by_marketplace") or {}
+        market_summaries = []
+        for marketplace in ("wb", "ozon"):
+            info = by_market.get(marketplace) or {}
+            best = info.get("cheapest")
+            if best:
+                market_summaries.append(
+                    f"{_marketplace_label(marketplace)}: от "
+                    f"{fmt_rub(float(best.get('sale_price_rub') or 0))}")
+            elif marketplace in (result.get("marketplaces") or []):
+                market_summaries.append(f"{_marketplace_label(marketplace)}: нет подходящих")
+        if cheapest:
+            self.var_lowest_summary.set(
+                f"🏆 Общий минимум сейчас: {fmt_rub(float(cheapest.get('sale_price_rub') or 0))} "
+                f"— {_marketplace_label(cheapest)} · "
+                f"{cheapest.get('brand', '')} {cheapest.get('name', '')}".strip()
+                + (f" | {' · '.join(market_summaries)}" if market_summaries else ""))
+        else:
+            self.var_lowest_summary.set("Подходящих предложений не найдено")
+
+        mode = result.get("mode") or result.get("effective_mode")
+        status_parts = [
+            str(result.get("message") or ""),
+            f"Режим: {mode}; получено уникальных карточек: {result.get('total_raw', 0)}; "
+            f"после фильтра: {result.get('total_matched', len(offers))}; "
+            f"отсечено явных аксессуаров: {result.get('excluded_accessories', 0)}.",
+        ]
+        if mode == "demo":
+            status_parts.append("⚠ Это DEMO-результаты, не настоящие товары.")
+        if result.get("recorded"):
+            status_parts.append(
+                f"В собственную историю записано предложений: {result['recorded']}.")
+        if result.get("errors"):
+            status_parts.append("Ошибки источников: " + " | ".join(
+                str(e) for e in result["errors"][:3]))
+        self.var_lowest_status.set(" ".join(part for part in status_parts if part))
+
+        if offers:
+            first_iid = next(iter(self._lowest_by_iid), None)
+            if first_iid:
+                self.tree_lowest.selection_set(first_iid)
+                self.tree_lowest.focus(first_iid)
+                self._on_select_lowest()
+        else:
+            self.var_lowest_details.set(
+                "Попробуй добавить бренд, точную модель и вариант; либо сними "
+                "«Только точные совпадения». Если источник недоступен — проверь WB/Ozon на главной.")
+
+    def _selected_lowest(self) -> dict | None:
+        sel = self.tree_lowest.selection()
+        return self._lowest_by_iid.get(sel[0]) if sel else None
+
+    def _on_select_lowest(self, _e=None):
+        offer = self._selected_lowest()
+        if not offer:
+            return
+        marketplace = _marketplace_of(offer)
+        sale = float(offer.get("sale_price_rub") or 0)
+        basic = float(offer.get("price_rub") or sale)
+        above = offer.get("above_cheapest_pct")
+        history_bits = []
+        if offer.get("own_history_median"):
+            history_bits.append(
+                f"медиана своей базы {fmt_rub(float(offer['own_history_median']))}")
+        if offer.get("own_history_min"):
+            history_bits.append(
+                f"минимум своей базы {fmt_rub(float(offer['own_history_min']))}")
+        if offer.get("own_history_count"):
+            history_bits.append(f"наблюдений: {offer['own_history_count']}")
+        self.var_lowest_details.set(
+            f"{_marketplace_label(marketplace)} | "
+            f"{MARKETPLACE_ID_LABELS[marketplace]} {offer.get('nm')} | "
+            f"текущая цена {fmt_rub(sale)} | цена карточки {fmt_rub(basic)} "
+            f"(скидка продавца −{float(offer.get('discount_pct') or 0):.0f}%, только справка) | "
+            f"совпадение: {offer.get('match_label', '—')} "
+            f"{float(offer.get('match_score') or 0) * 100:.0f}% | "
+            + (f"дороже общего минимума на {float(above):.0f}% | " if above else "это общий минимум | ")
+            + (("история: " + ", ".join(history_bits) + " | ") if history_bits else "своей истории пока нет | ")
+            + "перед покупкой проверь вариант, продавца, доставку и цену в корзине.")
+
+    def _open_lowest_selected(self):
+        offer = self._selected_lowest()
+        if offer and offer.get("url"):
+            webbrowser.open(offer["url"])
+
+    def _open_lowest_best(self):
+        if self._lowest_best and self._lowest_best.get("url"):
+            webbrowser.open(self._lowest_best["url"])
 
     def _dismiss_selected(self):
         a = self._selected_alert()

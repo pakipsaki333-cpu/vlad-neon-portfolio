@@ -128,6 +128,23 @@ class ControllerTest(unittest.TestCase):
             self.assertEqual(st["stats"]["products_seen"], result["scanned"])
             ctrl.shutdown()
 
+    def test_lowest_price_demo_search(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            settings = Settings()
+            settings._data["mode"] = "demo"
+            ctrl = DesktopController(settings=settings,
+                                     db=DB(Path(d) / "t.db"))
+            try:
+                result = ctrl.find_lowest_prices(
+                    "Sony наушники", marketplaces=["wb"], pages=1,
+                    record=False)
+                self.assertEqual(result["mode"], "demo")
+                self.assertTrue(result["offers"])
+                self.assertEqual(result["cheapest"]["brand"], "Sony")
+                self.assertIn("WH-1000XM5", result["cheapest"]["name"])
+            finally:
+                ctrl.shutdown()
+
     def test_telegram_test_not_configured(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
             ctrl = DesktopController(settings=Settings(),

@@ -9,9 +9,10 @@ only when every enabled live source is unavailable.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from . import demo, detector
 from .config import DATA_DIR, Settings
@@ -52,6 +53,123 @@ def _blank_marketplace_state() -> dict[str, Any]:
     }
 
 
+_LOWEST_STOPWORDS = {
+    "для", "и", "в", "на", "с", "по", "от", "до", "из", "у", "the", "a", "an",
+}
+_LOWEST_UNIT_ALIASES = {
+    "гб": "gb", "gb": "gb", "гигабайт": "gb", "гигабайта": "gb",
+    "тб": "tb", "tb": "tb", "мл": "ml", "ml": "ml", "мм": "mm", "mm": "mm",
+    "см": "cm", "cm": "cm", "кг": "kg", "kg": "kg", "л": "l",
+}
+_LOWEST_ACCESSORY_STEMS = (
+    "чехол", "бампер", "защитн", "стекл", "пленк", "плёнк", "кабел",
+    "шнур", "адаптер", "переходник", "зарядн", "ремешок", "подставк",
+    "держател", "креплен", "наклейк", "стикер", "запчаст", "комплектующ",
+    "сменн", "расходн", "фильтр", "щетк", "щётк", "мешок", "картридж",
+)
+_LOWEST_VARIANT_MARKERS = {
+    "pro", "max", "ultra", "plus", "mini", "lite", "fe", "se", "air",
+}
+
+
+def _lowest_tokens(text: Any) -> list[str]:
+    """Small language-tolerant tokenizer for manual cheapest-offer search."""
+    normalized = str(text or "").lower().replace("ё", "е")
+    raw_tokens = re.findall(r"[a-zа-я0-9]+(?:[.,][0-9]+)?", normalized)
+    tokens: list[str] = []
+    for token in raw_tokens:
+        token = token.strip(".,")
+        if not token:
+            continue
+        attached_unit = re.fullmatch(
+            r"(\d+(?:[.,]\d+)?)(гб|gb|тб|tb|мл|ml|мм|mm|см|cm|кг|kg|л|l)",
+            token)
+        if attached_unit:
+            tokens.append(attached_unit.group(1).replace(",", "."))
+            tokens.append(_LOWEST_UNIT_ALIASES[attached_unit.group(2)])
+            continue
+        token = _LOWEST_UNIT_ALIASES.get(token, token)
+        tokens.append(token.replace(",", "."))
+    return tokens
+
+
+def _lowest_common_prefix(a: str, b: str) -> int:
+    limit = min(len(a), len(b))
+    idx = 0
+    while idx < limit and a[idx] == b[idx]:
+        idx += 1
+    return idx
+
+
+def _lowest_token_matches(query_token: str, title_tokens: Iterable[str]) -> bool:
+    token_set = set(title_tokens)
+    if query_token in token_set:
+        return True
+    if any(ch.isdigit() for ch in query_token):
+        return False
+    if len(query_token) < 5:
+        return False
+    for token in token_set:
+        if len(token) < 4:
+            continue
+        common = _lowest_common_prefix(query_token, token)
+        if common >= 4 and common / min(len(query_token), len(token)) >= 0.75:
+            return True
+    return False
+
+
+def _lowest_is_accessory(title_tokens: list[str],
+                         query_tokens: list[str]) -> bool:
+    """Detect cases/glass/cables etc. without punishing a real product
+    whose title merely mentions a charger or a case in the bundle."""
+    query_stems = {
+        stem for stem in _LOWEST_ACCESSORY_STEMS
+        if any(token.startswith(stem.replace("ё", "е"))
+               for token in query_tokens)
+    }
+    for stem in _LOWEST_ACCESSORY_STEMS:
+        clean_stem = stem.replace("ё", "е")
+        if stem in query_stems or clean_stem in query_stems:
+            continue
+        positions = [idx for idx, token in enumerate(title_tokens)
+                     if token.startswith(clean_stem)]
+        if not positions:
+            continue
+        if min(positions) <= 2:
+            return True
+        # «чехол для iPhone», «стекло для смартфона» and similar phrases
+        # are accessories wherever the phrase starts in a long title.
+        if any(pos + 1 < len(title_tokens) and title_tokens[pos + 1] == "для"
+               for pos in positions):
+            return True
+    return False
+
+
+def _lowest_match_score(product: dict[str, Any], query: str,
+                        query_tokens: list[str]) -> tuple[float, bool]:
+    title = f"{product.get('brand') or ''} {product.get('name') or ''}"
+    title_tokens = _lowest_tokens(title)
+    accessory = _lowest_is_accessory(title_tokens, query_tokens)
+    clean_query = str(query or "").strip()
+    try:
+        if clean_query.isdigit() and int(product.get("nm") or 0) == int(clean_query):
+            return 1.0, accessory
+    except (TypeError, ValueError):
+        pass
+    if not query_tokens:
+        return 0.0, accessory
+    matched = sum(
+        1 for token in query_tokens
+        if _lowest_token_matches(token, title_tokens))
+    score = matched / len(query_tokens)
+    extra_variants = (_LOWEST_VARIANT_MARKERS & set(title_tokens)) - set(query_tokens)
+    if extra_variants and score >= 0.999:
+        # iPhone 15 Pro contains every token of «iPhone 15», but it is a
+        # different variant; keep it as a close, not exact, match.
+        score = 0.89
+    return score, accessory
+
+
 class Scanner:
     def __init__(self, db: DB, settings: Settings):
         self.db = db
@@ -85,6 +203,7 @@ class Scanner:
             m: _blank_marketplace_state() for m in _MARKETPLACES}
         self._probe_lock = threading.Lock()
         self._client_lock = threading.RLock()
+        self._lowest_search_lock = threading.Lock()
 
     # ------------------------------------------------------------------ #
     def on_alert(self, cb: Callable[[dict], None]) -> None:
@@ -472,6 +591,298 @@ class Scanner:
         effective = self._refresh_mode_state()
         log.info("auto mode -> %s (%s)", effective, self.mode_reason)
         return effective
+
+    # -- manual lowest-current-price search ------------------------------ #
+    def find_lowest_prices(
+            self, query: str,
+            marketplaces: Iterable[str] | str | None = None,
+            pages: int | None = None,
+            limit: int = 50,
+            strict_match: bool = False,
+            record: bool = True) -> dict[str, Any]:
+        """Find the cheapest current offers for one user-entered product.
+
+        This is intentionally separate from the anomaly scanner: it does
+        not create alerts and does not treat a seller's crossed-out price
+        as proof of a bargain.  It asks each selected marketplace for the
+        same query (cheapest-first plus popular ordering), de-duplicates
+        cards, drops obvious accessories, scores title relevance, and
+        returns current offers sorted by the payable/sale price.
+
+        When ``record`` is true in LIVE mode, only the displayed offers
+        are also upserted into the product DB.  That grows Price Hunter's
+        own price history without sending Telegram alerts from a manual
+        search.
+        """
+        clean_query = " ".join(str(query or "").split()).strip()
+        if len(clean_query) < 2:
+            raise ValueError("Введи название или модель товара")
+        if len(clean_query) > 160:
+            raise ValueError("Запрос слишком длинный (максимум 160 символов)")
+
+        query_tokens: list[str] = []
+        for token in _lowest_tokens(clean_query):
+            if token in _LOWEST_STOPWORDS or token in query_tokens:
+                continue
+            query_tokens.append(token)
+        if not query_tokens:
+            raise ValueError("Запрос не содержит названия или модели товара")
+
+        cfg = self.settings.get()
+        if marketplaces is None:
+            requested = self._enabled_marketplaces(cfg)
+        elif isinstance(marketplaces, str):
+            requested = [marketplaces]
+        else:
+            requested = list(marketplaces)
+        selected: list[str] = []
+        for value in requested:
+            marketplace = str(value or "").strip().lower()
+            if marketplace not in _MARKETPLACES:
+                raise ValueError("Площадка должна быть wb или ozon")
+            if marketplace not in selected:
+                selected.append(marketplace)
+        if not selected:
+            raise ValueError("Выбери хотя бы WB или Ozon")
+
+        try:
+            page_count = int(pages if pages is not None
+                             else cfg.get("pages_per_query", 1) or 1)
+        except Exception:
+            page_count = 1
+        page_count = max(1, min(3, page_count))
+        try:
+            result_limit = int(limit)
+        except Exception:
+            result_limit = 50
+        result_limit = max(1, min(200, result_limit))
+
+        with self._lowest_search_lock:
+            mode = self.resolve_mode()
+            raw_by_market: dict[str, list[dict[str, Any]]] = {
+                marketplace: [] for marketplace in selected}
+            errors_by_market: dict[str, list[str]] = {
+                marketplace: [] for marketplace in selected}
+
+            if mode == "demo":
+                if "wb" in selected:
+                    raw_by_market["wb"] = [
+                        dict(product, marketplace="wb", source="demo")
+                        for product in demo.generate_scan([clean_query])
+                    ]
+                if "ozon" in selected:
+                    errors_by_market["ozon"].append(
+                        "DEMO-каталог эмулирует только WB; для Ozon нужен LIVE/auto")
+            else:
+                sorts = ("priceup", "popular")
+                for marketplace in selected:
+                    deduped: dict[int, dict[str, Any]] = {}
+                    delay_key = ("wb_request_delay_sec" if marketplace == "wb"
+                                 else "ozon_request_delay_sec")
+                    try:
+                        delay = float(cfg.get(
+                            delay_key, 1.2 if marketplace == "wb" else 3.0) or 0)
+                    except Exception:
+                        delay = 0.0
+                    try:
+                        client = self._client_for(marketplace)
+                    except Exception as e:
+                        errors_by_market[marketplace].append(
+                            f"{_LABELS[marketplace]}: не удалось создать клиент: {e}")
+                        continue
+                    for sort_idx, sort in enumerate(sorts):
+                        first_id_page1: int | None = None
+                        for page in range(1, page_count + 1):
+                            try:
+                                batch = client.search(
+                                    clean_query, page=page, sort=sort) or []
+                            except Exception as e:
+                                errors_by_market[marketplace].append(
+                                    f"{_LABELS[marketplace]} {clean_query!r}/"
+                                    f"{sort}/стр.{page}: {str(e)[:260]}")
+                                break
+                            if not batch:
+                                break
+                            try:
+                                first_id = int(batch[0].get("nm") or 0) or None
+                            except Exception:
+                                first_id = None
+                            if page == 1:
+                                first_id_page1 = first_id
+                            elif first_id is not None and first_id == first_id_page1:
+                                break
+                            for raw in batch:
+                                if not isinstance(raw, dict):
+                                    continue
+                                try:
+                                    nm = int(raw.get("nm") or raw.get("sku") or 0)
+                                    sale = float(raw.get("sale_price_rub") or 0)
+                                except Exception:
+                                    continue
+                                if not nm or sale <= 0:
+                                    continue
+                                product = dict(raw)
+                                product["marketplace"] = marketplace
+                                product["nm"] = nm
+                                if marketplace == "ozon":
+                                    product["sku"] = int(product.get("sku") or nm)
+                                current = deduped.get(nm)
+                                if current is None or sale < float(
+                                        current.get("sale_price_rub") or sale):
+                                    if current is not None:
+                                        for key in ("photo", "supplier", "brand"):
+                                            if not product.get(key) and current.get(key):
+                                                product[key] = current[key]
+                                    deduped[nm] = product
+                            if delay > 0 and (sort_idx < len(sorts) - 1
+                                              or page < page_count):
+                                time.sleep(delay)
+                    raw_by_market[marketplace] = list(deduped.values())
+
+            excluded_accessories = 0
+            all_offers: list[dict[str, Any]] = []
+            matched_by_market: dict[str, int] = {}
+            for marketplace in selected:
+                annotated: list[dict[str, Any]] = []
+                for raw in raw_by_market.get(marketplace, []):
+                    try:
+                        sale = float(raw.get("sale_price_rub") or 0)
+                        basic = float(raw.get("price_rub") or sale)
+                    except Exception:
+                        continue
+                    if sale <= 0:
+                        continue
+                    score, accessory = _lowest_match_score(
+                        raw, clean_query, query_tokens)
+                    if accessory:
+                        excluded_accessories += 1
+                        continue
+                    product = dict(raw)
+                    product["marketplace"] = marketplace
+                    product.setdefault("brand", "")
+                    product.setdefault("supplier", "")
+                    product.setdefault("photo", "")
+                    product.setdefault("rating", 0)
+                    product.setdefault("feedbacks", 0)
+                    product["price_rub"] = basic
+                    product["sale_price_rub"] = sale
+                    product["discount_pct"] = round(
+                        (basic - sale) / basic * 100, 1) if basic > sale else 0.0
+                    product["match_score"] = round(score, 3)
+                    annotated.append(product)
+
+                exact = [p for p in annotated if p["match_score"] >= 0.999]
+                close = [p for p in annotated if p["match_score"] >= 0.60]
+                similar = [p for p in annotated if p["match_score"] >= 0.34]
+                if strict_match:
+                    pool = exact
+                elif exact:
+                    pool = exact
+                elif close:
+                    pool = close
+                else:
+                    pool = similar
+                for product in pool:
+                    product["match_label"] = (
+                        "точное" if product["match_score"] >= 0.999
+                        else "близкое" if product["match_score"] >= 0.60
+                        else "похожее")
+                matched_by_market[marketplace] = len(pool)
+                all_offers.extend(pool)
+
+            def offer_sort_key(product: dict[str, Any]) -> tuple:
+                try:
+                    feedbacks = int(product.get("feedbacks") or 0)
+                except Exception:
+                    feedbacks = 0
+                return (
+                    float(product.get("sale_price_rub") or 0),
+                    -float(product.get("match_score") or 0),
+                    -feedbacks,
+                    str(product.get("name") or ""),
+                )
+
+            all_offers.sort(key=offer_sort_key)
+            offers = all_offers[:result_limit]
+
+            recorded = 0
+            for product in offers:
+                marketplace = _normalize_marketplace(
+                    product.get("marketplace"), product)
+                own = self.db.history_stats(
+                    int(product["nm"]), marketplace=marketplace)
+                product["own_history_count"] = own.get("count", 0)
+                product["own_history_median"] = own.get("median")
+                product["own_history_min"] = own.get("min")
+                if record and mode == "live":
+                    try:
+                        self.db.upsert_product(product)
+                        recorded += 1
+                    except Exception:
+                        pass
+
+            cheapest = offers[0] if offers else None
+            cheapest_price = float(cheapest["sale_price_rub"]) if cheapest else None
+            for idx, product in enumerate(offers, 1):
+                product["rank"] = idx
+                product["is_cheapest"] = idx == 1
+                if cheapest_price:
+                    product["above_cheapest_rub"] = round(
+                        float(product["sale_price_rub"]) - cheapest_price, 2)
+                    product["above_cheapest_pct"] = round(
+                        (float(product["sale_price_rub"]) / cheapest_price - 1) * 100, 1)
+                else:
+                    product["above_cheapest_rub"] = None
+                    product["above_cheapest_pct"] = None
+
+            by_marketplace: dict[str, dict[str, Any]] = {}
+            for marketplace in selected:
+                marketplace_offers = [
+                    p for p in all_offers
+                    if _normalize_marketplace(p.get("marketplace"), p) == marketplace]
+                by_marketplace[marketplace] = {
+                    "label": _LABELS[marketplace],
+                    "raw_count": len(raw_by_market.get(marketplace, [])),
+                    "matched_count": matched_by_market.get(marketplace, 0),
+                    "cheapest": marketplace_offers[0] if marketplace_offers else None,
+                    "errors": errors_by_market.get(marketplace, []),
+                }
+
+            flat_errors = [error for marketplace in selected
+                           for error in errors_by_market.get(marketplace, [])]
+            if cheapest:
+                message = (
+                    f"Самая низкая текущая цена: "
+                    f"{_LABELS[_normalize_marketplace(cheapest.get('marketplace'), cheapest)]} — "
+                    f"{float(cheapest['sale_price_rub']):,.0f} ₽. "
+                    f"Подходящих предложений: {len(all_offers)}.")
+            elif flat_errors:
+                message = ("Не удалось получить подходящие предложения. "
+                           "Проверь доступность площадок и попробуй точнее указать модель.")
+            else:
+                message = ("Подходящих предложений не найдено. Уточни бренд, "
+                           "модель и вариант (например, объём памяти).")
+
+            return {
+                "ok": bool(offers),
+                "query": clean_query,
+                "searched_at": int(time.time()),
+                "mode": mode,
+                "effective_mode": self.effective_mode,
+                "requested_mode": cfg.get("mode", "auto"),
+                "marketplaces": selected,
+                "pages": page_count,
+                "strict_match": bool(strict_match),
+                "offers": offers,
+                "cheapest": cheapest,
+                "by_marketplace": by_marketplace,
+                "total_raw": sum(len(v) for v in raw_by_market.values()),
+                "total_matched": len(all_offers),
+                "excluded_accessories": excluded_accessories,
+                "recorded": recorded,
+                "errors": flat_errors,
+                "message": message,
+            }
 
     # -- marketplace fetching ------------------------------------------- #
     def _fetch_marketplace(self, marketplace: str, cfg: dict,

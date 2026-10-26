@@ -72,6 +72,25 @@ def products(limit: int = 100, marketplace: str | None = None):
         marketplace=_marketplace_or_400(marketplace))}
 
 
+@app.get("/api/lowest-price")
+def lowest_price(query: str, marketplaces: str | None = None,
+                 pages: int = 2, limit: int = 50,
+                 strict_match: bool = False, record: bool = True):
+    """Manual cross-marketplace search for the cheapest current offer."""
+    selected = None
+    if marketplaces:
+        selected = [
+            _marketplace_or_400(value.strip())
+            for value in marketplaces.split(",") if value.strip()
+        ]
+    try:
+        return scanner.find_lowest_prices(
+            query, marketplaces=selected, pages=pages, limit=limit,
+            strict_match=strict_match, record=record)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
 @app.get("/api/product/{nm}/history")
 def history(nm: int, marketplace: str = "wb"):
     selected = _marketplace_or_400(marketplace, "wb")

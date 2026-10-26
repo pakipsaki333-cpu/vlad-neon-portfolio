@@ -193,6 +193,16 @@ class DesktopController:
     def product_history(self, nm: int, marketplace: str = "wb") -> list[dict]:
         return self.db.product_history(nm, marketplace=marketplace)
 
+    def find_lowest_prices(self, query: str,
+                           marketplaces: list[str] | None = None,
+                           pages: int = 2,
+                           strict_match: bool = False,
+                           record: bool = True) -> dict:
+        """Manual cheapest-current-offer search for the GUI tab."""
+        return self.scanner.find_lowest_prices(
+            query, marketplaces=marketplaces, pages=pages, limit=50,
+            strict_match=strict_match, record=record)
+
     def drain_alerts(self) -> list[dict]:
         out = []
         while True:

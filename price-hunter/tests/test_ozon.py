@@ -618,6 +618,107 @@ class MarketplaceScannerTest(unittest.TestCase):
                 db.close()
 
 
+class LowestPriceSearchTest(unittest.TestCase):
+    @staticmethod
+    def _product(marketplace: str, nm: int, name: str, sale: float,
+                 basic: float | None = None) -> dict:
+        return {
+            "marketplace": marketplace, "nm": nm,
+            **({"sku": nm} if marketplace == "ozon" else {}),
+            "name": name, "brand": "Apple", "supplier": "Seller",
+            "price_rub": basic or sale, "sale_price_rub": sale,
+            "rating": 4.9, "feedbacks": 100, "photo": "",
+            "url": (f"https://www.ozon.ru/product/iphone-{nm}/"
+                    if marketplace == "ozon"
+                    else f"https://www.wildberries.ru/catalog/{nm}/detail.aspx"),
+        }
+
+    def test_cross_marketplace_lowest_excludes_accessories_and_wrong_variant(self):
+        product = self._product
+
+        class FakeWB:
+            def __init__(self):
+                self.sorts = []
+
+            def search(self, q, page=1, sort="popular"):
+                self.sorts.append(sort)
+                return [
+                    product("wb", 2001, "Чехол для iPhone 15 128 ГБ", 500),
+                    product("wb", 2002, "Смартфон iPhone 15 128 ГБ", 65_000),
+                    product("wb", 2003, "Смартфон iPhone 15 128 ГБ", 63_000),
+                ]
+
+        class FakeOzon:
+            def __init__(self):
+                self.sorts = []
+
+            def search(self, q, page=1, sort="popular"):
+                self.sorts.append(sort)
+                return [
+                    product("ozon", 3001, "Смартфон iPhone 15 Pro 128 ГБ", 60_000),
+                    product("ozon", 3002, "Смартфон iPhone 15 128 ГБ", 62_000),
+                ]
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            db = DB(Path(d) / "t.db")
+            try:
+                scanner = Scanner(db, _settings())
+                wb, ozon = FakeWB(), FakeOzon()
+                _inject(scanner, "wb", wb)
+                _inject(scanner, "ozon", ozon)
+                scanner.last_probe_ts = 999_999_999_999  # live: skip probes
+                result = scanner.find_lowest_prices(
+                    "iPhone 15 128 ГБ", pages=1, record=True)
+
+                self.assertTrue(result["ok"])
+                self.assertEqual(wb.sorts, ["priceup", "popular"])
+                self.assertEqual(ozon.sorts, ["priceup", "popular"])
+                self.assertEqual(
+                    [offer["sale_price_rub"] for offer in result["offers"]],
+                    [62_000.0, 63_000.0, 65_000.0])
+                self.assertEqual(result["cheapest"]["marketplace"], "ozon")
+                self.assertEqual(result["cheapest"]["nm"], 3002)
+                self.assertEqual(
+                    result["by_marketplace"]["wb"]["cheapest"]["nm"], 2003)
+                self.assertEqual(result["excluded_accessories"], 1)
+                self.assertTrue(all(
+                    offer["match_label"] == "точное"
+                    for offer in result["offers"]))
+                self.assertEqual(result["recorded"], 3)
+                self.assertEqual(db.stats()["products_seen"], 3)
+                self.assertEqual(db.stats()["alerts_total"], 0)
+            finally:
+                scanner.close(close_browser=False)
+                db.close()
+
+    def test_strict_lowest_search_rejects_close_variant(self):
+        product = self._product
+
+        class FakeWB:
+            def search(self, q, page=1, sort="popular"):
+                return [product(
+                    "wb", 4001, "Смартфон iPhone 15 Pro 128 ГБ", 60_000)]
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            db = DB(Path(d) / "t.db")
+            try:
+                scanner = Scanner(db, _settings())
+                _inject(scanner, "wb", FakeWB())
+                scanner.last_probe_ts = 999_999_999_999
+                strict = scanner.find_lowest_prices(
+                    "iPhone 15 128 ГБ", marketplaces=["wb"], pages=1,
+                    strict_match=True, record=False)
+                relaxed = scanner.find_lowest_prices(
+                    "iPhone 15 128 ГБ", marketplaces=["wb"], pages=1,
+                    strict_match=False, record=False)
+                self.assertEqual(strict["offers"], [])
+                self.assertEqual(len(relaxed["offers"]), 1)
+                self.assertEqual(relaxed["offers"][0]["match_label"], "близкое")
+            finally:
+                scanner.close(close_browser=False)
+                db.close()
+
+
 class MarketplacePresentationTest(unittest.TestCase):
     def test_telegram_labels_ozon_and_sku(self):
         text = alert_text({
