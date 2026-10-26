@@ -544,3 +544,23 @@ def random_layout(rules: Rules, rng: random.Random | None = None, sweeps: int = 
     for _ in range(sweeps):
         ch.sweep()
     return [[divmod(i, n) for i in idx] for _, idx in ch.ships()]
+
+
+def sample_layouts(rules: Rules, count: int, rng: random.Random | None = None,
+                   burn: int = 40, thin: int = 3):
+    """Много почти независимых случайных расстановок одной цепью (быстрее, чем по одной)."""
+    rng = rng or random.Random()
+    n = rules.size
+    geo = Geometry.get(n, rules.touch)
+    prob = Problem(geo, rules.fleet, 0, 0, (1 << geo.nn) - 1, False)
+    ch = Chain(prob, rng)
+    if not ch.initialize(max_nodes=200000, restarts=20):
+        raise RuntimeError("не удалось расставить флот при таких правилах")
+    for _ in range(burn):
+        ch.sweep()
+    out = []
+    for _ in range(count):
+        for _ in range(thin):
+            ch.sweep()
+        out.append([[divmod(i, n) for i in idx] for _, idx in ch.ships()])
+    return out
