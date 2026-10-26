@@ -78,7 +78,7 @@ jobs:
             if (Test-Path $f) {
               $r = Get-Content $f -Raw -Encoding utf8 | ConvertFrom-Json
               $scr = ($r.screens | ForEach-Object { "$($_.geometry -join 'x')@$($_.dpr)" }) -join ", "
-              Write-Output "::notice title=Самопроверка $d::ok=$($r.ok) mode=$($r.mode) won=$($r.won) shots=$($r.shots) max_lag=$($r.max_lag_s)s time=$($r.elapsed_s)s grids=$($r.grids_on_screen) screens=$scr errors=$($r.errors.Count)"
+              Write-Output "::notice title=Самопроверка $d::ok=$($r.ok) mode=$($r.mode) won=$($r.won) shots=$($r.shots) max_lag=$($r.max_lag_s)s time=$($r.elapsed_s)s grids=$($r.grids_on_screen) screens=$scr errors=$($r.errors.Count) hidden_api=$($r.capture_hidden_main)/$($r.capture_hidden_overlay) main_in_capture=$($r.main_window_in_capture) diff=$($r.main_window_pixels_diff)"
             } else {
               Write-Output "::warning title=Самопроверка $d::report.json не найден"
             }

@@ -82,7 +82,30 @@ def run_selftest(out_dir: str, max_seconds: float = 170.0) -> int:
     t_start = time.time()
     state = {"phase": "calibrate", "since_sync": time.time(), "shot_taken_at": None, "shots": 0}
 
+    def capture_hiding_check():
+        """Видно ли окно помощника на снимке экрана (при скрытии от захвата — не должно)."""
+        report["capture_hidden_main"] = bool(win.capture_hidden)
+        report["capture_hidden_overlay"] = bool(win.overlay.capture_hidden)
+        if report.get("mode") != "screen":
+            return
+        try:
+            ps = win.screen() or QGuiApplication.primaryScreen()
+            shot = capture.grab_screen(ps)
+            smap = capture.ScreenMap(ps, (shot.width(), shot.height()))
+            g = win.frameGeometry()
+            x0, y0 = smap.to_image(g.topLeft())
+            x1, y1 = smap.to_image(g.bottomRight())
+            crop = capture.qimage_to_rgb(shot, QRect(int(x0), int(y0), int(x1 - x0), int(y1 - y0)))
+            own = capture.qimage_to_rgb(win.grab().toImage())
+            h, w = min(crop.shape[0], own.shape[0]), min(crop.shape[1], own.shape[1])
+            diff = float(np.abs(crop[:h, :w].astype(int) - own[:h, :w].astype(int)).mean())
+            report["main_window_pixels_diff"] = round(diff, 1)
+            report["main_window_in_capture"] = diff < 25
+        except Exception as ex:
+            report["errors"].append(f"capture hiding check: {ex}")
+
     def finish(ok_extra=True):
+        capture_hiding_check()
         try:
             win.grab().save(os.path.join(out_dir, "helper_final.png"))
             practice.grab().save(os.path.join(out_dir, "practice_final.png"))
