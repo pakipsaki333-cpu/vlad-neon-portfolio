@@ -3,9 +3,10 @@
 Маленькое окно поверх браузера: смотрит на экран, само видит «мимо / ранил / убил»
 на поле соперника на любом сайте и подсказывает, куда бить, — с вероятностью попадания
 для каждой клетки. Помогает расставить свои корабли, учится на исправлениях, есть
-рамка-подсказка прямо поверх игры и встроенная тренировка. Windows-exe собирается в Actions.
+рамка-подсказка прямо поверх игры и встроенная тренировка.
 
-➡ **Скачать, запустить и как это работает: [`seabattle-helper/`](seabattle-helper/README.md)**
+➡ **Готовый exe для Windows: [SeaBattleHelper.exe](https://github.com/pakipsaki333-cpu/vlad-neon-portfolio/releases/download/seabattle-v1.0.0/SeaBattleHelper.exe)** (релиз [seabattle-v1.0.0](https://github.com/pakipsaki333-cpu/vlad-neon-portfolio/releases/tag/seabattle-v1.0.0))
+➡ **Как пользоваться и как это работает: [`seabattle-helper/`](seabattle-helper/README.md)**
 
 ```bat
 cd seabattle-helper

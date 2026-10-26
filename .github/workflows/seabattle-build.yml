@@ -4,6 +4,7 @@ name: seabattle · тесты и сборка exe
 # с настоящим захватом экрана, сборка SeaBattleHelper.exe и самопроверка уже собранного exe.
 on:
   push:
+    branches: ["**"]          # только ветки: пуш тега не запускает лишнюю сборку (для тегов есть release)
     paths:
       - "seabattle-helper/**"
       - ".github/workflows/seabattle-build.yml"
@@ -15,7 +16,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: seabattle-${{ github.ref }}
+  group: seabattle-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
