@@ -1,0 +1,89 @@
+name: doss · сборка образа и проверка конфига
+
+# Проверяет то, что нельзя проверить в песочнице: скачивание Xray, сборку
+# Docker-образа, валидность конфига для реального бинарника xray.
+on:
+  push:
+    paths:
+      - "doss/deploy/paas/**"
+      - "doss/bot/paas_run.py"
+      - ".github/workflows/doss-image.yml"
+  pull_request:
+    paths:
+      - "doss/deploy/paas/**"
+  workflow_dispatch:
+
+jobs:
+  vpn-image:
+    name: образ doss-ws (x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Сборка образа
+        run: docker build -t doss-ws doss/deploy/paas
+
+      - name: Версия Xray внутри образа
+        run: docker run --rm doss-ws xray version
+
+      - name: Конфиг генерируется и валиден
+        run: |
+          set -euo pipefail
+          UUID=11111111-2222-4333-8444-555555555555
+          docker run --rm -e DOSS_PRINT_CONFIG=1 -e PORT=10000 -e DOSS_UUID=$UUID \
+            doss-ws > /tmp/cfg.json
+          jq . /tmp/cfg.json
+          test "$(jq -r '.inbounds[0].port' /tmp/cfg.json)" = "10000"
+          test "$(jq -r '.inbounds[0].streamSettings.network' /tmp/cfg.json)" = "ws"
+          test "$(jq -r '.inbounds[0].settings.clients[0].id' /tmp/cfg.json)" = "$UUID"
+
+      - name: xray -test настоящим бинарником
+        run: |
+          set -euo pipefail
+          UUID=11111111-2222-4333-8444-555555555555
+          docker run --rm -e DOSS_PRINT_CONFIG=1 -e PORT=10000 -e DOSS_UUID=$UUID \
+            doss-ws > "$PWD/cfg.json"
+          docker run --rm -v "$PWD/cfg.json":/tmp/xray-config.json doss-ws \
+            xray -test -config /tmp/xray-config.json
+
+      - name: Ссылка для клиента корректна
+        run: |
+          set -euo pipefail
+          OUT="$(docker run --rm -e DOSS_DRY_RUN=1 -e PORT=8080 \
+            -e RENDER_EXTERNAL_HOSTNAME=demo.onrender.com \
+            -e DOSS_UUID=11111111-2222-4333-8444-555555555555 doss-ws)"
+          echo "$OUT"
+          LINK="$(printf '%s\n' "$OUT" | grep '^vless://' | head -1)"
+          case "$LINK" in
+            *type=ws*)    echo "ok: ws" ;;
+            *) echo "нет type=ws"; exit 1 ;;
+          esac
+          case "$LINK" in
+            *security=tls*) echo "ok: tls" ;;
+            *) echo "нет security=tls"; exit 1 ;;
+          esac
+          case "$LINK" in
+            *:443*) echo "ok: порт 443" ;;
+            *) echo "неверный порт"; exit 1 ;;
+          esac
+
+  bot-image:
+    name: образ doss-bot
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Сборка
+        run: docker build -t doss-bot -f doss/deploy/paas/bot/Dockerfile doss/bot
+
+      - name: Запуск без токена не падает, health отвечает
+        run: |
+          set -euo pipefail
+          docker run -d --name doss-bot-test -p 8080:8080 -e PORT=8080 doss-bot
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/ ; then ok=1; break; fi
+            sleep 2
+          done
+          test "${ok:-0}" = "1" || { docker logs doss-bot-test; exit 1; }
+          docker logs doss-bot-test
+          docker rm -f doss-bot-test

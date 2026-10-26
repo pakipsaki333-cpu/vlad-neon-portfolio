@@ -37,6 +37,28 @@ def serve_health() -> None:
     HTTPServer(("0.0.0.0", port), Health).serve_forever()
 
 
+def bot_token() -> str:
+    tok = os.environ.get("BOT_TOKEN", "").strip()
+    return "" if tok in {"", "CHANGE_ME", "123456:AA..."} else tok
+
+
+def prepare_env(log) -> bool:
+    """Готовит окружение. False — если бот запускать нельзя (нет токена)."""
+    if not bot_token():
+        log.warning(
+            "BOT_TOKEN не задан — сервис работает в режиме health-сервера. "
+            "Впиши BOT_TOKEN в Environment на PaaS, сервис перезапустится сам."
+        )
+        return False
+    if os.environ.get("PROVIDER", "link") == "link" and not os.environ.get("DOSS_LINK", "").strip():
+        log.warning(
+            "DOSS_LINK не задан — временно использую demo-провайдера "
+            "(ссылки будут заглушками). Возьми vless:// из логов doss-ws."
+        )
+        os.environ["PROVIDER"] = "demo"
+    return True
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -48,6 +70,10 @@ def main() -> None:
     # иначе PaaS сочтёт сервис упавшим и будет перезапускать контейнер.
     threading.Thread(target=serve_health, daemon=True).start()
     log.info("health-сервер слушает :%s", os.environ.get("PORT", "8080"))
+
+    while not prepare_env(log):
+        # без токена держим сервис живым и ждём перезапуска с новыми env
+        time.sleep(3600)
 
     backoff = 10
     while True:
