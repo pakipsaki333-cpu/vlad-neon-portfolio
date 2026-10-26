@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+#
+# doss-set-token — единственный шаг, который нужен от владельца.
+#
+#   sudo doss-set-token            # спросит токен (ввод скрыт)
+#   sudo doss-set-token 123:ABC    # можно и аргументом
+#
+# Что делает: проверяет токен через getMe, прописывает его в /etc/doss/bot.env,
+# запускает бота, ждёт ответа и показывает ссылку на бота + напоминание про /start.
+#
+set -euo pipefail
+
+ENV_FILE="${BOT_ENV:-/etc/doss/bot.env}"
+SERVICE="${BOT_SERVICE:-doss-bot}"
+
+log()  { printf '\033[1;36m[doss]\033[0m %s\n' "$*"; }
+ok()   { printf '\033[1;32m  ✓\033[0m %s\n' "$*"; }
+die()  { printf '\033[1;31m[doss]\033[0m %s\n' "$*" >&2; exit 1; }
+
+[[ "$(id -u)" -eq 0 || "${DOSS_ALLOW_NONROOT:-0}" == "1" ]] || die "запускай от root: sudo doss-set-token"
+
+TOKEN="${1:-}"
+if [[ -z "$TOKEN" ]]; then
+  echo "Токен бота берётся у @BotFather: /newbot → строка вида 123456789:AAH..."
+  echo "Вставь токен и нажми Enter (ввод не отображается):"
+  read -rs TOKEN
+  echo
+fi
+
+TOKEN="$(printf '%s' "$TOKEN" | tr -d '[:space:]')"
+[[ -n "$TOKEN" ]] || die "пустой токен"
+[[ "$TOKEN" =~ ^[0-9]{6,}:[A-Za-z0-9_-]{30,}$ ]] || die "это не похоже на токен бота (формат 123456789:AA...)"
+
+log "проверяю токен у Telegram"
+RESP="$(curl -fsS --max-time 20 "https://api.telegram.org/bot${TOKEN}/getMe" 2>/dev/null || true)"
+[[ -n "$RESP" ]] || die "Telegram недоступен или токен неверный (проверь сеть и токен)"
+printf '%s' "$RESP" | grep -q '"ok":true' || die "Telegram отклонил токен: $(printf '%s' "$RESP" | head -c 200)"
+
+USERNAME="$(printf '%s' "$RESP" | jq -r '.result.username')"
+BOT_NAME="$(printf '%s' "$RESP" | jq -r '.result.first_name')"
+ok "бот найден: @${USERNAME} (${BOT_NAME})"
+
+mkdir -p "$(dirname "$ENV_FILE")"
+[[ -f "$ENV_FILE" ]] || die "нет $ENV_FILE — сначала запусти deploy/install-all.sh"
+chmod 640 "$ENV_FILE" 2>/dev/null || true
+
+# заменяем только строку BOT_TOKEN, остальные настройки не трогаем
+if grep -q '^BOT_TOKEN=' "$ENV_FILE"; then
+  tmp="$(mktemp)"
+  TOKEN="$TOKEN" awk 'BEGIN{t=ENVIRON["TOKEN"]}
+    /^BOT_TOKEN=/{print "BOT_TOKEN=" t; next} {print}' "$ENV_FILE" > "$tmp"
+  cat "$tmp" > "$ENV_FILE" && rm -f "$tmp"
+else
+  printf 'BOT_TOKEN=%s\n' "$TOKEN" >> "$ENV_FILE"
+fi
+
+log "запускаю бота"
+command -v systemctl >/dev/null || die "systemd не найден — запусти вручную: cd /opt/doss/bot && .venv/bin/python -m dossbot"
+systemctl daemon-reload
+systemctl enable "$SERVICE" >/dev/null 2>&1 || true
+systemctl restart "$SERVICE"
+sleep 4
+
+if systemctl is-active --quiet "$SERVICE"; then
+  ok "бот работает"
+else
+  echo
+  echo "Бот не поднялся. Последние строки лога:"
+  journalctl -u "$SERVICE" -n 25 --no-pager || true
+  die "исправь ошибку выше и повтори: sudo systemctl restart $SERVICE"
+fi
+
+# убираем getUpdates-конфликт, если кто-то запускал бота локально
+curl -fsS --max-time 15 "https://api.telegram.org/bot${TOKEN}/deleteWebhook?drop_pending_updates=false" >/dev/null 2>&1 || true
+
+cat <<EOF
+
+──────────────────────────────────────────────────────────────
+Бот готов: https://t.me/${USERNAME}
+
+Осталось два нажатия:
+  1. Открой бота и отправь /start — ты автоматически станешь владельцем.
+  2. Отправь /whoami, затем /grant <твой id> inf — это личный безлимит.
+
+Дальше бот сам:
+  • выдаёт триал 3 дня / 10 ГБ по /start → «Попробовать»
+  • принимает оплату в Stars и продлевает подписку
+  • отключает истёкшие подписки и тех, кто выбрал лимит трафика
+  • присылает тебе /stats
+──────────────────────────────────────────────────────────────
+EOF

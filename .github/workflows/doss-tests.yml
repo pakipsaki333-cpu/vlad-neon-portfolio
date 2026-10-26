@@ -1,0 +1,52 @@
+name: doss · тесты
+
+on:
+  push:
+    paths:
+      - "doss/**"
+      - ".github/workflows/doss-tests.yml"
+  pull_request:
+    paths:
+      - "doss/**"
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: CLI и сервер
+            cmd: bash doss/server/tests/test_cli.sh
+            deps: ""
+          - name: PaaS-режим
+            cmd: bash doss/deploy/paas/tests/test_paas.sh
+            deps: ""
+          - name: логика бота
+            cmd: python3 doss/bot/tests/selftest.py
+            deps: ""
+          - name: бот ↔ CLI
+            cmd: python3 doss/bot/tests/test_provider_cli.py
+            deps: ""
+          - name: панель
+            cmd: python3 doss/panel/tests/test_panel.py
+            deps: "fastapi uvicorn qrcode[pil] python-multipart httpx"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Зависимости (jq, qrencode)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq qrencode
+
+      - name: pip-зависимости
+        if: matrix.deps != ''
+        run: pip install --quiet ${{ matrix.deps }}
+
+      - name: ${{ matrix.name }}
+        run: ${{ matrix.cmd }}

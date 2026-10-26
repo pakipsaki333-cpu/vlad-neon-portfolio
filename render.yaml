@@ -1,0 +1,58 @@
+# Doss — деплой в один клик на бесплатный Render (без карты).
+#
+# Кнопка: https://render.com/deploy?repo=https://github.com/pakipsaki333-cpu/vlad-neon-portfolio
+# Или вручную: Render → New → Blueprint → выбрать этот репозиторий → Apply.
+#
+# Создаются два бесплатных сервиса:
+#   doss-ws  — VPN-узел (VLESS + WebSocket). Ссылка печатается в логах.
+#   doss-bot — Telegram-бот. Ждёт BOT_TOKEN и DOSS_LINK в Environment.
+#
+# Лимиты free-плана Render: 750 ч/мес, 512 МБ, 5 ГБ трафика.
+# Подробности: doss/deploy/paas/README.md и doss/docs/no-card.md
+
+services:
+  # ------------------------------------------------------------- VPN-узел
+  - type: web
+    name: doss-ws
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./doss/deploy/paas/Dockerfile
+    dockerContext: ./doss/deploy/paas
+    autoDeploy: true
+    envVars:
+      - key: DOSS_PATH
+        value: /doss-ws
+      - key: DOSS_LOGLEVEL
+        value: warning
+      # Свой постоянный UUID (необязательно). Без него UUID выводится
+      # стабильно из RENDER_SERVICE_ID и переживает рестарты.
+      # - key: DOSS_UUID
+      #   sync: false
+
+  # --------------------------------------------------------- Telegram-бот
+  # Без BOT_TOKEN сервис не падает, а работает health-сервером и ждёт настроек.
+  - type: web
+    name: doss-bot
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./doss/deploy/paas/bot/Dockerfile
+    dockerContext: ./doss/bot
+    autoDeploy: true
+    healthCheckPath: /
+    envVars:
+      - key: PROVIDER
+        value: link
+      - key: TRIAL_DAYS
+        value: "3"
+      - key: TRIAL_GB
+        value: "10"
+      - key: PLAN_DAYS
+        value: "30"
+      - key: STARS_PRICE
+        value: "150"
+      - key: BOT_TOKEN
+        sync: false
+      - key: DOSS_LINK
+        sync: false
