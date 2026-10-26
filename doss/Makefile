@@ -2,7 +2,7 @@
 PY := $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3)
 PYTEST_DEPS = fastapi uvicorn qrcode[pil] python-multipart httpx aiogram aiosqlite
 
-.PHONY: help test test-server test-bot test-panel panel bot venv clean
+.PHONY: help test test-server test-bot test-panel panel bot venv clean bundle
 
 help:
 	@echo "make test         — все тесты (server + bot + panel)"
@@ -36,6 +36,13 @@ panel:
 
 bot:
 	cd bot && ../.venv/bin/python -m dossbot
+
+bundle:
+	@cd .. && tar --exclude='doss/.venv' --exclude='__pycache__' --exclude='*.pyc' \
+		-czf doss-bundle.tar.gz doss && mv doss-bundle.tar.gz doss/
+	@echo "готово: doss/doss-bundle.tar.gz"
+	@echo "  scp doss/doss-bundle.tar.gz root@SERVER:/tmp/"
+	@echo "  ssh root@SERVER 'mkdir -p /opt && tar -xzf /tmp/doss-bundle.tar.gz -C /opt && /opt/doss/deploy/install-all.sh'"
 
 clean:
 	find . -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
