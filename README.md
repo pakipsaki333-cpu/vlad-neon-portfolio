@@ -23,5 +23,6 @@ VLESS + REALITY (+ XHTTP / AmneziaWG), CLI для доступа, Telegram-бо�
 
 ➡ **План, установка и ограничения: [`doss/README.md`](doss/README.md)**
 ➡ Где брать бесплатные сервера в 2026: [`doss/docs/free-servers.md`](doss/docs/free-servers.md)
+➡ **Запустить за 3 клика (бесплатно, без карты): [`DEPLOY.md`](DEPLOY.md)**
 ➡ Нет карты? Четыре схемы запуска: [`doss/docs/no-card.md`](doss/docs/no-card.md)
 ➡ Telegram-бот: [`doss/bot/`](doss/bot/README.md) · панель: [`doss/panel/`](doss/panel/app.py) · Android: [`doss/android/`](doss/android/README.md)
