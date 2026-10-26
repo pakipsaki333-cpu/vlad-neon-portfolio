@@ -194,14 +194,14 @@ cmd_peer() {
 
   local next_ip priv pub endpoint
   next_ip="$(jq -r '[.peers[].ip | split(".")[3] | tonumber] | (max // 1) + 1' "$PEERS_JSON")"
-  [[ "$next_ip" -lt 2 ]] && next_ip=2
-  [[ "$next_ip" -gt 254 ]] && die "адреса в подсети закончились"
+  if [[ "$next_ip" -lt 2 ]]; then next_ip=2; fi
+  if [[ "$next_ip" -gt 254 ]]; then die "адреса в подсети закончились"; fi
 
   priv="$(awg genkey)"
   pub="$(printf '%s' "$priv" | awg pubkey)"
   endpoint="$(curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null || true)"
-  [[ -z "$endpoint" ]] && endpoint="$(curl -fsS --max-time 10 https://ifconfig.me 2>/dev/null || true)"
-  [[ -z "$endpoint" ]] && endpoint="<IP_СЕРВЕРА>"
+  if [[ -z "$endpoint" ]]; then endpoint="$(curl -fsS --max-time 10 https://ifconfig.me 2>/dev/null || true)"; fi
+  if [[ -z "$endpoint" ]]; then endpoint="<IP_СЕРВЕРА>"; fi
 
   jq --arg n "$name" --arg ip "${SUBNET}.${next_ip}" --arg pub "$pub" \
      '.peers[$n] = {ip:$ip, public_key:$pub, created: (now|todate)}' "$PEERS_JSON" \

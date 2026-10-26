@@ -35,9 +35,11 @@ jq -n '{version:1, created:"2026-01-01T00:00:00Z",
 echo "== build-base"
 "$CLI" build-base >/dev/null 2>&1
 check "шаблон создан" "[[ -s '$BASE_CONFIG' ]]"
-check "в шаблоне 2 инбаунда (tcp + xhttp)" "[[ \$(jq '.inbounds|length' '$BASE_CONFIG') == 2 ]]"
+check "в шаблоне 3 инбаунда (tcp + api + xhttp)" "[[ \$(jq '.inbounds|length' '$BASE_CONFIG') == 3 ]]"
+check "api слушает только localhost" "[[ \$(jq -r '.inbounds[]|select(.tag==\"api\")|.listen' '$BASE_CONFIG') == 127.0.0.1 ]]"
+check "stats/policy включены" "jq -e '.stats and .policy.levels[\"0\"].statsUserUplink' '$BASE_CONFIG'"
 check "reality dest = domain:443" "[[ \$(jq -r '.inbounds[0].streamSettings.realitySettings.dest' '$BASE_CONFIG') == 'www.microsoft.com:443' ]]"
-check "xhttp network" "[[ \$(jq -r '.inbounds[1].streamSettings.network' '$BASE_CONFIG') == 'xhttp' ]]"
+check "xhttp network" "[[ \$(jq -r '.inbounds[]|select(.tag==\"reality-xhttp\")|.streamSettings.network' '$BASE_CONFIG') == 'xhttp' ]]"
 
 echo "== user add"
 OUT="$("$CLI" user add anna --expires 2026-12-31 --traffic 200 2>/dev/null)"
@@ -46,13 +48,13 @@ check "uuid в state" "[[ \$(jq -r '.users.anna.uuid' '$DOSS_ETC/state.json') =~
 check "flow vision в ссылке" "[[ '$OUT' == *'flow=xtls-rprx-vision'* ]]"
 check "pbk = публичный ключ" "[[ '$OUT' == *'pbk=PUBKEY_PUBKEY_PUBKEY_PUBKEY_PUBKEY='* ]]"
 check "sid из state" "[[ '$OUT' == *'sid='\$(jq -r '.users.anna.short_id' '$DOSS_ETC/state.json')* ]]"
-check "клиент попал в конфиг Xray" "[[ \$(jq '[.inbounds[0].settings.clients[]|select(.email==\"anna\")]|length' '$XRAY_CONFIG') == 1 ]]"
-check "у xhttp-клиента нет flow" "[[ \$(jq -r '.inbounds[1].settings.clients[0].flow // \"none\"' '$XRAY_CONFIG') == 'none' ]]"
-check "персональный short_id добавлен в сервер" "[[ \$(jq '.inbounds[0].streamSettings.realitySettings.shortIds|length' '$XRAY_CONFIG') -ge 4 ]]"
+check "клиент попал в конфиг Xray" "[[ \$(jq '[.inbounds[]|select(.tag==\"reality-tcp\")|.settings.clients[]|select(.email==\"anna\")]|length' '$XRAY_CONFIG') == 1 ]]"
+check "у xhttp-клиента нет flow" "[[ \$(jq -r '.inbounds[]|select(.tag==\"reality-xhttp\")|.settings.clients[0].flow // \"none\"' '$XRAY_CONFIG') == 'none' ]]"
+check "персональный short_id добавлен в сервер" "[[ \$(jq '.inbounds[]|select(.tag==\"reality-tcp\")|.streamSettings.realitySettings.shortIds|length' '$XRAY_CONFIG') -ge 4 ]]"
 
 echo "== второй пользователь"
 "$CLI" user add boris --unlimited >/dev/null 2>&1
-check "двое активных в конфиге" "[[ \$(jq '.inbounds[0].settings.clients|length' '$XRAY_CONFIG') == 2 ]]"
+check "двое активных в конфиге" "[[ \$(jq '[.inbounds[]|select(.tag==\"reality-tcp\")|.settings.clients]|.[0]|length' '$XRAY_CONFIG') == 2 ]]"
 check "дубликат имени запрещён" "! '$CLI' user add anna >/dev/null 2>&1"
 
 echo "== list / link / qr / sub"
@@ -64,22 +66,51 @@ check "url-base склеивается" "[[ \$('$CLI' sub anna --url-base http:/
 
 echo "== disable / enable"
 "$CLI" user set boris --disable >/dev/null 2>&1
-check "выключенный не попадает в конфиг" "[[ \$(jq '.inbounds[0].settings.clients|length' '$XRAY_CONFIG') == 1 ]]"
+check "выключенный не попадает в конфиг" "[[ \$(jq '[.inbounds[]|select(.tag==\"reality-tcp\")|.settings.clients]|.[0]|length' '$XRAY_CONFIG') == 1 ]]"
 "$CLI" user set boris --enable >/dev/null 2>&1
-check "включённый вернулся" "[[ \$(jq '.inbounds[0].settings.clients|length' '$XRAY_CONFIG') == 2 ]]"
+check "включённый вернулся" "[[ \$(jq '[.inbounds[]|select(.tag==\"reality-tcp\")|.settings.clients]|.[0]|length' '$XRAY_CONFIG') == 2 ]]"
 
 echo "== tick (истечение)"
 "$CLI" user add old --expires 2020-01-01 >/dev/null 2>&1
 "$CLI" tick >/dev/null 2>&1
 check "истёкший отключён" "[[ \$(jq -r '.users.old.enabled' '$DOSS_ETC/state.json') == false ]]"
-check "истёкший убран из конфига" "[[ \$(jq '.inbounds[0].settings.clients|length' '$XRAY_CONFIG') == 2 ]]"
+check "истёкший убран из конфига" "[[ \$(jq '[.inbounds[]|select(.tag==\"reality-tcp\")|.settings.clients]|.[0]|length' '$XRAY_CONFIG') == 2 ]]"
 STATUS="$("$CLI" status)"
 check "статус считает активных" "grep -q '3 всего, 2 активных' <<< \"\$STATUS\""
 
-echo "== revoke"
+echo "== traffic (заглушка Xray API)"
+cat > "$ROOT/fake-xray" <<'FAKE'
+#!/usr/bin/env bash
+# заглушка: -test всегда ок, api statquery отдаёт по 0.6 ГБ на anna и boris
+if [[ "${1:-}" == "-test" ]]; then exit 0; fi
+if [[ "${1:-}" == "api" ]]; then
+  cat <<'JSON'
+{"stat":[
+ {"name":"user>>>anna>>>traffic>>>uplink","value":"300000000"},
+ {"name":"anna","value":"0"},
+ {"name":"user>>>anna>>>traffic>>>downlink","value":"300000000"},
+ {"name":"user>>>boris>>>traffic>>>uplink","value":"600000000"},
+ {"name":"user>>>boris>>>traffic>>>downlink","value":"0"}]}
+JSON
+  exit 0
+fi
+exit 0
+FAKE
+chmod +x "$ROOT/fake-xray"
+XRAY_BIN="$ROOT/fake-xray"
+export XRAY_BIN
+# anna: лимит 1 ГБ — после двух прогонов (1.2 ГБ) должна отключиться
+"$CLI" user set anna --traffic 1 >/dev/null 2>&1
+"$CLI" traffic >/dev/null 2>&1
+check "трафик учтён (anna 0.6 ГБ)" "[[ \$(jq -r '.users.anna.used_bytes' '$DOSS_ETC/state.json') == 600000000 ]]"
+check "anna пока активна" "[[ \$(jq -r '.users.anna.enabled' '$DOSS_ETC/state.json') == true ]]"
+"$CLI" traffic >/dev/null 2>&1
+check "лимит 1 ГБ превышен → отключена" "[[ \$(jq -r '.users.anna.enabled' '$DOSS_ETC/state.json') == false ]]"
+check "boris (unlimited) не отключён" "[[ \$(jq -r '.users.boris.enabled' '$DOSS_ETC/state.json') == true ]]"
+check "anna недоступна в конфиге" "[[ \$(jq '[.inbounds[]|select(.tag==\"reality-tcp\")|.settings.clients]|.[0]|length' '$XRAY_CONFIG') == 1 ]]"
 "$CLI" user rm anna >/dev/null 2>&1
 check "anna удалена из state" "[[ \$(jq -r '.users.anna // \"none\"' '$DOSS_ETC/state.json') == none ]]"
-check "anna удалена из конфига" "! jq -e '.inbounds[0].settings.clients[]|select(.email==\"anna\")' '$XRAY_CONFIG'"
+check "anna удалена из конфига" "! jq -e '.inbounds[]|select(.tag==\"reality-tcp\")|.settings.clients[]|select(.email==\"anna\")' '$XRAY_CONFIG'"
 check "sub-файл anna удалён" "[[ \$(ls '$SUB_DIR' | wc -l) -eq 2 ]]"
 
 echo

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Обёртка для панели: `sudo /usr/local/bin/doss-run <аргументы doss>`.
+# Нужна, чтобы панель работала под непривилегированным пользователем doss,
+# но могла менять состояние сервера только через CLI.
+set -euo pipefail
+exec /usr/local/bin/doss "$@"

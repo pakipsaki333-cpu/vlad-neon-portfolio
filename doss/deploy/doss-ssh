@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Обёртка для authorized_keys: по SSH-ключу бота разрешено вызывать ТОЛЬКО `doss`.
+# Ставится в /usr/local/bin/doss-ssh и запускается через sudo из forced command.
+set -euo pipefail
+
+case "${SSH_ORIGINAL_COMMAND:-}" in
+  doss\ *) exec /usr/local/bin/doss ${SSH_ORIGINAL_COMMAND#doss } ;;
+  ""     ) echo "только: ssh <host> doss <команда>" >&2; exit 1 ;;
+  *      ) echo "запрещено: разрешена только команда doss" >&2; exit 1 ;;
+esac

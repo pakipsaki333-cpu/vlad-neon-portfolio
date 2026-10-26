@@ -1,0 +1,20 @@
+[Unit]
+Description=Doss panel (лендинг + подписки + админка)
+After=network.target
+
+[Service]
+User=doss
+Group=doss
+WorkingDirectory=/opt/doss/panel
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/doss/panel.env
+ExecStart=/opt/doss/panel/.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8080 --proxy-headers
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

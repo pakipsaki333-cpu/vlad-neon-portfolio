@@ -1,0 +1,20 @@
+[Unit]
+Description=Doss Telegram bot
+After=network.target
+
+[Service]
+User=doss
+Group=doss
+WorkingDirectory=/opt/doss/bot
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/doss/bot.env
+ExecStart=/opt/doss/bot/.venv/bin/python -m dossbot
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

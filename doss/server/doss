@@ -63,6 +63,12 @@ build_base() {
     --arg path "$path" \
 '{
   log: { loglevel: "warning", access: "none" },
+  api: { tag: "api", services: ["StatsService"] },
+  stats: {},
+  policy: {
+    levels: { "0": { statsUserUplink: true, statsUserDownlink: true } },
+    system: { statsInboundUplink: false, statsInboundDownlink: false }
+  },
   inbounds: ([
     {
       tag: "reality-tcp",
@@ -84,7 +90,13 @@ build_base() {
       },
       sniffing: { enabled: true, destOverride: ["http", "tls", "quic"] }
     }
-  ] + (if $xhttp then [{
+  ] + [{
+      tag: "api",
+      listen: "127.0.0.1",
+      port: 10085,
+      protocol: "dokodemo-door",
+      settings: { address: "127.0.0.1" }
+    }] + (if $xhttp then [{
       tag: "reality-xhttp",
       listen: "0.0.0.0",
       port: $xport,
@@ -112,6 +124,7 @@ build_base() {
   routing: {
     domainStrategy: "AsIs",
     rules: [
+      { type: "field", inboundTag: ["api"], outboundTag: "api" },
       { type: "field", protocol: ["bittorrent"], outboundTag: "block" }
     ]
   }
@@ -182,14 +195,14 @@ write_sub_file() {
 refresh_all_subs() {
   local n token
   while IFS=$'\t' read -r n token; do
-    [[ -z "$n" || -z "$token" ]] && continue
+    if [[ -z "$n" || -z "$token" ]]; then continue; fi
     write_sub_file "$n" "$token" >/dev/null
   done < <(jq -r '.users | to_entries[] | [.key, .value.token] | @tsv' "$STATE")
 }
 
 link_uri() {
   local name="$1" mode="tcp"
-  [[ "${2:-}" == "--xhttp" ]] && mode="xhttp"
+  if [[ "${2:-}" == "--xhttp" ]]; then mode="xhttp"; fi
   jq -e --arg n "$name" '.users[$n] != null' "$STATE" >/dev/null || die "нет пользователя $name"
 
   local uuid sid host port dest pub frag
@@ -312,15 +325,19 @@ cmd_user_set() {
 
 cmd_user_list() {
   need_state
-  printf '%-16s %-9s %-8s %-12s %-9s %s\n' ИМЯ UUID ВКЛ СРОК ТРАФИК ЗАМЕТКА
+  printf '%-16s %-9s %-5s %-12s %-14s %s\n' ИМЯ UUID ВКЛ СРОК ТРАФИК ЗАМЕТКА
   jq -r '.users | to_entries[]
     | [ .key,
         (.value.uuid[0:8]),
         (if .value.enabled then "да" else "нет" end),
         (.value.expires // "бессрочно"),
-        (if .value.unlimited then "∞" else ((.value.traffic_gb|tostring) + " GB") end),
+        (if .value.unlimited then "∞ использовано "
+           + (((.value.used_bytes // 0) / 1000000000 * 10 | floor) / 10 | tostring) + " GB"
+         else ((.value.traffic_gb|tostring) + " GB использовано "
+           + (((.value.used_bytes // 0) / 1000000000 * 10 | floor) / 10 | tostring) + " GB")
+         end),
         (.value.note // "") ] | @tsv' "$STATE" \
-  | while IFS=$'\t' read -r a b c d e f; do printf '%-16s %-9s %-8s %-12s %-9s %s\n' "$a" "$b" "$c" "$d" "$e" "$f"; done
+  | while IFS=$'\t' read -r a b c d e f; do printf '%-16s %-9s %-5s %-12s %-14s %s\n' "$a" "$b" "$c" "$d" "$e" "$f"; done
 }
 
 cmd_link() {
@@ -352,13 +369,19 @@ cmd_sub() {
   local token file
   token="$(jq -r --arg n "$name" '.users[$n].token' "$STATE")"
   file="$(write_sub_file "$name" "$token")"
-  [[ -n "$base" ]] && printf '%s/sub/%s.txt\n' "${base%/}" "$token"
+  if [[ -n "$base" ]]; then printf '%s/sub/%s.txt\n' "${base%/}" "$token"; fi
   info "файл подписки: $file"
 }
 
 cmd_tick() {
   need_state
   local today; today="$(date -u +%F)"
+
+  # учёт трафика и лимиты — до проверки сроков
+  if [[ -x "$XRAY_BIN" ]]; then
+    cmd_traffic >/dev/null 2>&1 || info "предупреждение: не удалось снять статистику трафика"
+  fi
+
   local expired
   expired="$(jq -r --arg d "$today" \
     '[.users | to_entries[] | select(.value.enabled and .value.expires != null and .value.expires < $d) | .key] | join(" ")' "$STATE")"
@@ -371,6 +394,56 @@ cmd_tick() {
     info "отключён: $n (срок истёк)"
   done
   rebuild
+}
+
+# Учёт трафика и лимиты. Требует api/stats в конфиге (build-base их ставит).
+# xray api statsquery отдаёт счётчики по email пользователя.
+cmd_traffic() {
+  need_state
+  local reset="0"
+  if [[ "${1:-}" == "--reset" ]]; then reset="1"; fi
+  [[ -x "$XRAY_BIN" ]] || die "нет бинарника xray — запускай на сервере"
+
+  local args=(api statsquery --server=127.0.0.1:10085)
+  if [[ "$reset" == "1" ]]; then args+=(--reset); fi
+
+  local raw
+  raw="$("$XRAY_BIN" "${args[@]}" 2>/dev/null)" || die "Xray API недоступен (порт 10085). Проверь: systemctl status xray"
+
+  # "user>>>anna>>>traffic>>>uplink" -> {anna: байты}
+  local totals
+  totals="$(printf '%s' "$raw" | jq -c '
+    [ .stat[]?
+      | select(.name | startswith("user>>>"))
+      | { u: (.name | split(">>>")[1]), v: ((.value | tonumber) // 0) } ]
+    | group_by(.u) | map({ key: .[0].u, value: (map(.v) | add) }) | from_entries' 2>/dev/null)"     || die "не смог разобрать ответ Xray API"
+
+  if [[ "$totals" == "null" || -z "$totals" ]]; then totals='{}'; fi
+
+  jq --argjson t "$totals" '
+    .users |= with_entries(
+      .value.used_bytes = ((.value.used_bytes // 0) + ($t[.key] // 0))
+    )' "$STATE" | save_state
+
+  printf '%-16s %10s %10s\n' ИМЯ ИЗРАСХОДОВАНО ЛИМИТ
+  jq -r '.users | to_entries[] | [
+      .key,
+      (((.value.used_bytes // 0) / 1000000000 * 10 | floor) / 10 | tostring) + " GB",
+      (if .value.unlimited then "∞" else ((.value.traffic_gb | tostring) + " GB") end)
+    ] | @tsv' "$STATE"   | while IFS=$'\t' read -r n used lim; do printf '%-16s %10s %10s\n' "$n" "$used" "$lim"; done
+
+  local over
+  over="$(jq -r '[ .users | to_entries[]
+      | select(.value.enabled and (.value.unlimited | not)
+               and ((.value.used_bytes // 0) >= (.value.traffic_gb // 0) * 1000000000))
+      | .key ] | join(" ")' "$STATE")"
+  if [[ -n "$over" ]]; then
+    for n in $over; do
+      jq --arg n "$n" '.users[$n].enabled = false' "$STATE" | save_state
+      info "лимит исчерпан, отключён: $n"
+    done
+    rebuild
+  fi
 }
 
 cmd_status() {
@@ -405,10 +478,11 @@ doss — управление пользователями
   doss link <имя>              vless:// для Reality/TCP
   doss qr <имя>                QR + ссылка
   doss sub <имя> [--url-base http://host]
-  doss tick                    отключить истёкшие (по cron/timer)
+  doss traffic [--reset]       учесть трафик и применить лимиты
+  doss tick                    отключить истёкшие/перебравшие лимит
   doss build-base              пересобрать шаблон конфига из state.json
   doss rebuild                 применить пользователей к конфигу Xray
-  doss status | keys
+  doss status | keys | export
 EOF
 }
 
@@ -429,9 +503,11 @@ main() {
     sub)     cmd_sub "$@" ;;
     build-base) build_base ;;
     tick)    cmd_tick ;;
+    traffic) cmd_traffic "$@" ;;
     rebuild) rebuild; info "конфиг пересобран" ;;
     status)  cmd_status ;;
     keys)    cmd_keys ;;
+    export)  need_state; cat "$STATE" ;;
     ""|-h|--help) usage ;;
     *) die "неизвестная команда: $cmd" ;;
   esac

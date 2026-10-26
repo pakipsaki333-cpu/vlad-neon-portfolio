@@ -172,8 +172,8 @@ else
   SHORT_IDS="$(jq -cn --arg a "$(random_hex 4)" --arg b "$(random_hex 8)" '["", $a, $b]')"
 
   HOST_IP="$(curl -fsS --max-time 10 https://api.ipify.org || true)"
-  [[ -z "$HOST_IP" ]] && HOST_IP="$(curl -fsS --max-time 10 https://ifconfig.me || true)"
-  [[ -z "$HOST_IP" ]] && HOST_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
+  if [[ -z "$HOST_IP" ]]; then HOST_IP="$(curl -fsS --max-time 10 https://ifconfig.me || true)"; fi
+  if [[ -z "$HOST_IP" ]]; then HOST_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"; fi
 
   jq -n \
     --arg created "$(date -u +%FT%TZ)" \
@@ -285,7 +285,7 @@ open_port() {
       iptables -I INPUT "${rule_num:-1}" -p "$proto" --dport "$port" -j ACCEPT 2>/dev/null || true
     fi
     for t in "${ipt6[@]:-}"; do
-      [[ -z "$t" ]] && continue
+      if [[ -z "$t" ]]; then continue; fi
       if "$t" -S INPUT 2>/dev/null | grep -qE '^-A INPUT -j (REJECT|DROP)'; then
         local r6
         r6="$("$t" -L INPUT --line-numbers -n | awk '/REJECT|DROP/{print $1; exit}')"
@@ -298,7 +298,7 @@ open_port() {
 }
 
 open_port tcp "$PORT"
-[[ "$WITH_XHTTP" == "1" ]] && open_port tcp "$XHTTP_PORT"
+if [[ "$WITH_XHTTP" == "1" ]]; then open_port tcp "$XHTTP_PORT"; fi
 log "порт $PORT/tcp открыт локально (не забудь Security List / Cloud Firewall у провайдера!)"
 
 # ------------------------------------------------------- 7. анти-idle (Oracle)
@@ -346,6 +346,23 @@ EOF
 fi
 
 # ------------------------------------------------------- 8. ежедневный tick
+cat > /etc/systemd/system/doss-traffic.service <<EOF
+[Unit]
+Description=Doss hourly traffic accounting
+[Service]
+Type=oneshot
+ExecStart=$DOSS_BIN traffic --reset
+EOF
+cat > /etc/systemd/system/doss-traffic.timer <<'EOF'
+[Unit]
+Description=Doss hourly traffic accounting timer
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+AccuracySec=2min
+[Install]
+WantedBy=timers.target
+EOF
 cat > /etc/systemd/system/doss-tick.service <<EOF
 [Unit]
 Description=Doss daily maintenance (истечение подписок)
@@ -364,6 +381,7 @@ WantedBy=timers.target
 EOF
 systemctl daemon-reload
 systemctl enable --now doss-tick.timer >/dev/null 2>&1 || true
+systemctl enable --now doss-traffic.timer >/dev/null 2>&1 || true
 
 # ------------------------------------------------------- 9. итог
 HOST="$(jq -r '.server.host' "$STATE")"
