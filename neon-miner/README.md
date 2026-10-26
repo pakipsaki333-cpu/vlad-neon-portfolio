@@ -10,8 +10,15 @@ Windows / Linux / macOS. Майнер не пишется с нуля — исп
 
 ## 🪙 Кошелёк — создай за 10 секунд (офлайн)
 
-**[→ Открыть `dist/NeonMiner-wallet.html`](dist/NeonMiner-wallet.html)** ·
-[исходники](windows/web/wallet_crypto.js) · [тесты](tests/test_wallet.py)
+**[→ Скачать `dist/NeonMiner-wallet.zip`](dist/NeonMiner-wallet.zip)** ← **эту ссылку и жми.**
+Внутри `NeonMiner-wallet.html` + `КАК-ОТКРЫТЬ.txt`. Распакуй и открой HTML двойным кликом.
+
+> ⚠️ Не открывай `.html` через `raw.githubusercontent.com` или jsDelivr: они отдают его
+> как `text/plain`, и браузер показывает исходный код вместо страницы. Файл надо именно
+> **скачать и открыть локально** — это ещё и безопаснее. Альтернатива: [превью Arena](https://8080-ibs2m3evu55s4jjgthtqe.e2b.app/wallet).
+
+[Исходники](windows/web/wallet_crypto.js) · [тесты](tests/test_wallet.py) ·
+[отдельный HTML](dist/NeonMiner-wallet.html)
 
 Без XMR-адреса майнить некуда. Это **один автономный HTML-файл**, который генерирует
 настоящий Monero-кошелёк у тебя в браузере. В нём стоит CSP `default-src 'none'`

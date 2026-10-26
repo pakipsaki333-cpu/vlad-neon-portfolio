@@ -91,6 +91,23 @@ def run_node() -> dict:
 
 
 class WalletSourceTest(unittest.TestCase):
+    def test_zip_is_selfcontained(self):
+        """Архив — рабочий способ скачать страницу одним кликом."""
+        import zipfile
+        zpath = DIST / "NeonMiner-wallet.zip"
+        if not zpath.exists():
+            self.skipTest("архив не собран")
+        with zipfile.ZipFile(zpath) as z:
+            names = z.namelist()
+            self.assertIn("NeonMiner-wallet.html", names)
+            self.assertTrue(any(n.endswith(".txt") for n in names))
+            inner = z.read("NeonMiner-wallet.html").decode("utf-8")
+        self.assertEqual(inner, HTML.read_text(encoding="utf-8"),
+                         "HTML внутри архива отличается от основного файла")
+        self.assertIn("Content-Security-Policy", inner)
+        digest = hashlib.sha256(zpath.read_bytes()).hexdigest()
+        self.assertIn(digest, (DIST / "SHA256SUMS.txt").read_text(encoding="utf-8"))
+
     def test_wordlist_is_official(self):
         words = json.loads(WORDLIST.read_text(encoding="utf-8"))
         self.assertEqual(len(words), 1626)
