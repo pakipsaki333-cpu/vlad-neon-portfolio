@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<!-- Жёсткий CSP: ни одного сетевого запроса. Ключи не могут покинуть страницу. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'">
+<title>NeonMiner · создать XMR-кошелёк офлайн</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#07090f;color:#e9eef7;font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;overflow-x:hidden}
+.glow{position:fixed;width:600px;height:600px;border-radius:50%;filter:blur(150px);opacity:.14;pointer-events:none;z-index:0}
+.ga{background:#2ff0cf;top:-240px;left:-180px}.gb{background:#9b6bff;top:300px;right:-240px}
+.wrap{position:relative;z-index:1;max-width:900px;margin:0 auto;padding:30px 22px 60px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding-bottom:16px;border-bottom:1px solid rgba(140,160,200,.14)}
+.brand{font-weight:800;letter-spacing:.14em}.brand span{color:#2ff0cf}
+.pill{font:11px ui-monospace,Menlo,Consolas,monospace;border:1px solid rgba(140,160,200,.2);padding:5px 11px;border-radius:20px;color:#8b95aa}
+.pill.ok{color:#2ff0cf;border-color:rgba(47,240,207,.4)}.pill.bad{color:#ff5f92;border-color:rgba(255,95,146,.5)}
+h1{font-size:clamp(27px,4vw,40px);letter-spacing:-.035em;margin:26px 0 10px;line-height:1.1}
+.accent{background:linear-gradient(95deg,#2ff0cf,#69b6ff 55%,#9b6bff);-webkit-background-clip:text;background-clip:text;color:transparent}
+.sub{color:#8b95aa;max-width:700px;margin:0 0 22px}
+.card{background:rgba(16,19,29,.8);border:1px solid rgba(140,160,200,.14);border-radius:16px;padding:20px;margin-bottom:18px}
+.warn{border-color:rgba(255,196,107,.35);background:rgba(255,196,107,.06);color:#f0dbb8}
+.warn h3{margin:0 0 8px;font-size:14px;color:#ffc46b}
+.warn ol{margin:8px 0 0;padding-left:20px}.warn li{margin:4px 0;font-size:12.5px}
+.btn{border:1px solid rgba(140,160,200,.2);background:rgba(255,255,255,.03);color:#e9eef7;border-radius:11px;padding:11px 17px;font:600 13px inherit;cursor:pointer;font-family:inherit}
+.btn:hover{border-color:#2ff0cf;color:#2ff0cf}
+.btn-main{background:linear-gradient(100deg,#2ff0cf,#3bb8ff);color:#04120f;border:0;padding:15px 28px;font-size:15px;box-shadow:0 8px 26px rgba(47,240,207,.2)}
+.btn-main:hover{color:#04120f;filter:brightness(1.1)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.lbl{font:10px ui-monospace,Menlo,Consolas,monospace;letter-spacing:.14em;text-transform:uppercase;color:#8b95aa;display:block;margin:0 0 7px}
+.out{background:#04060a;border:1px solid rgba(140,160,200,.16);border-radius:11px;padding:13px 15px;font:13px/1.7 ui-monospace,Menlo,Consolas,monospace;word-break:break-all;color:#c8d6e5;position:relative}
+.out.addr{font-size:15px;color:#2ff0cf;border-color:rgba(47,240,207,.35);padding:16px}
+.out.seed{font-size:14px;line-height:2;color:#e9eef7}
+.out.small{font-size:11px;color:#8b95aa}
+.copy{position:absolute;top:8px;right:8px;border:1px solid rgba(140,160,200,.2);background:#10131d;color:#2ff0cf;border-radius:7px;padding:4px 9px;font:10px ui-monospace,Menlo,Consolas,monospace;cursor:pointer}
+.copy:hover{border-color:#2ff0cf}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.hint{font-size:11.5px;color:#8b95aa;margin-top:8px}
+.hidden{display:none!important}
+.steps{counter-reset:s;list-style:none;padding:0;margin:0}
+.steps li{counter-increment:s;position:relative;padding-left:34px;margin-bottom:12px;font-size:13px;color:#c8d6e5}
+.steps li::before{content:counter(s);position:absolute;left:0;top:1px;width:22px;height:22px;border:1px solid rgba(47,240,207,.4);color:#2ff0cf;border-radius:50%;display:grid;place-items:center;font:11px ui-monospace,Menlo,Consolas,monospace}
+input,textarea{width:100%;background:#04060a;border:1px solid rgba(140,160,200,.16);color:#e9eef7;border-radius:10px;padding:11px 13px;font:13px ui-monospace,Menlo,Consolas,monospace;outline:none}
+input:focus,textarea:focus{border-color:#2ff0cf}
+.foot{border-top:1px solid rgba(140,160,200,.14);margin-top:26px;padding-top:16px;color:#8b95aa;font-size:11.5px}
+a{color:#2ff0cf}
+@media(max-width:640px){.grid2{grid-template-columns:1fr}}
+@media print{body{background:#fff;color:#000}.glow{display:none}.btn,.copy,.top .pill{display:none}.card{border:1px solid #999;background:#fff;color:#000;break-inside:avoid}.out{background:#f6f6f6;color:#000}.out.addr,.out.seed{color:#000}}
+</style>
+</head>
+<body>
+<div class="glow ga"></div><div class="glow gb"></div>
+<div class="wrap">
+  <div class="top">
+    <div class="brand"><span>◈</span> NEON<span style="color:#9b6bff">//</span>WALLET</div>
+    <span class="pill" id="selftest">● проверяю криптографию…</span>
+  </div>
+
+  <h1>Создай XMR-кошелёк<br><span class="accent">за 10 секунд, офлайн.</span></h1>
+  <p class="sub">Эта страница генерирует настоящий Monero-кошелёк прямо в твоём браузере.
+    Ключи не отправляются никуда: CSP запрещает любые сетевые запросы, а в коде нет ни одного fetch.
+    Полученный адрес вставляешь в <b>NeonMiner.exe</b> — и монетки капают твоему кошельку.</p>
+
+  <div class="card warn">
+    <h3>⚠ Это самое важное</h3>
+    <ol>
+      <li><b>25 слов = все твои деньги.</b> Кто знает сид-фразу — тот владеет монетами. Запиши её на бумаге, не фотографируй и не сохраняй в облако/мессенджер.</li>
+      <li>Для полной уверенности <b>отключи интернет</b> на время генерации, сохрани страницу и распечатай бэкап.</li>
+      <li>Никогда не отправляй сид-фразу мне, в поддержку пула или кому-либо ещё. Настоящая поддержка её не спрашивает.</li>
+      <li><b>Не используй адрес биржи.</b> Майнинг-выплаты на депозитные адреса часто теряются. Нужен именно этот кошелёк.</li>
+      <li>Проверь восстановление: введи сид внизу страницы и убедись, что адрес совпал. Сначала отправь tiny-сумму, потом майни.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <span class="lbl">Шаг 1 · генерация</span>
+    <div class="row">
+      <button class="btn btn-main" id="gen" disabled>🎲 Создать кошелёк</button>
+      <span class="hint" id="genHint">Идёт проверка криптографии…</span>
+    </div>
+  </div>
+
+  <div id="result" class="hidden">
+    <div class="card">
+      <span class="lbl">Твой XMR-адрес — вставь его в NeonMiner.exe</span>
+      <div class="out addr" id="addr"><button class="copy" data-copy="addr">копировать</button><span id="addrText"></span></div>
+      <div class="hint" id="addrCheck"></div>
+    </div>
+
+    <div class="card">
+      <span class="lbl">Сид-фраза · 25 слов Monero (English)</span>
+      <div class="out seed" id="seed"><button class="copy" data-copy="seed">копировать</button><span id="seedText"></span></div>
+      <div class="hint">Стандартный формат Monero — подходит для восстановления в Monero GUI, Cake Wallet, Feather, Monerujo.</div>
+    </div>
+
+    <div class="card">
+      <span class="lbl">Приватные ключи · для восстановления «по ключам»</span>
+      <div class="grid2">
+        <div><span class="lbl">spend key</span><div class="out small" id="spend"><button class="copy" data-copy="spend">копировать</button><span id="spendText"></span></div></div>
+        <div><span class="lbl">view key</span><div class="out small" id="view"><button class="copy" data-copy="view">копировать</button><span id="viewText"></span></div></div>
+      </div>
+      <div class="row" style="margin-top:16px">
+        <button class="btn" id="download">↓ Скачать бэкап .txt</button>
+        <button class="btn" id="print">🖨 Распечатать</button>
+        <button class="btn" id="again">🔄 Создать ещё один</button>
+      </div>
+      <div class="hint">Бэкап-файл содержит приватные ключи — храни его офлайн и не пересылай.</div>
+    </div>
+
+    <div class="card">
+      <span class="lbl">Шаг 2 · что делать дальше</span>
+      <ol class="steps">
+        <li>Скопируй <b>адрес</b> выше и вставь в поле «Твой Monero (XMR) адрес» в NeonMiner.exe.</li>
+        <li>Поставь галочку согласия и нажми «▶ Начать майнинг». Пул C3Pool заплатит на этот адрес.</li>
+        <li>Сид-фразу и ключи сохрани на бумаге. Если диск умрёт — деньги восстановятся по 25 словам.</li>
+        <li>Чтобы увидеть баланс: открой Monero GUI / Cake Wallet → «Restore wallet from seed» → введи 25 слов.</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="lbl">Проверка сид-фразы (можно ввести свою)</span>
+    <textarea id="checkSeed" rows="2" placeholder="вставь 25 слов через пробел — и увидишь, какой адрес из них получится"></textarea>
+    <div class="row" style="margin-top:10px"><button class="btn" id="checkBtn">Проверить</button><span class="hint" id="checkOut"></span></div>
+  </div>
+
+  <div class="foot">
+    NeonMiner Wallet · офлайн-генератор, без зависимостей и сети · совместим с официальным форматом Monero.<br>
+    Криптография сверена с <code>monero-project/monero</code> и независимым пакетом <code>monero</code>:
+    Keccak-256, ed25519, sc_reduce32, Base58, 1626 слов, CRC32-контрольное слово.
+  </div>
+</div>
+
+<script>
+/*__NM_WORDS__*/
+/*__NM_CRYPTO__*/
+(function(){
+'use strict';
+const C = window.NMWalletCrypto, WORDS = window.NM_WORDS;
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const hex = b => Array.from(b, x => x.toString(16).padStart(2,'0')).join('');
+let current = null;
+
+function selftest(){
+  const enc = new TextEncoder();
+  const hx = b => hex(b);
+  const checks = [];
+  checks.push(['Keccak-256', hx(C.keccak256(enc.encode(''))) === 'c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470']);
+  checks.push(['Keccak-256 abc', hx(C.keccak256(enc.encode('abc'))) === '4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45']);
+  checks.push(['wordlist 1626', WORDS.length === 1626 && WORDS[1083] === 'plus']);
+  // Официальный тест-вектор: 25 x "plus" -> ключи и адрес из monero-project/monero.
+  const v = C.walletFromMnemonic(('plus '.repeat(24) + 'plus'), WORDS);
+  checks.push(['вектор: spend key', v.spendKey === '3b040000'.repeat(8)]);
+  checks.push(['вектор: view key', v.viewKey === '43a8a7715eed11eff145a2024ddcc39740255156da7bbd736ee66a0838053a02']);
+  checks.push(['вектор: spend pub', v.spendPub === '4e6b660ef63933b07a01786992185bcb721720feff611aef4eb0ac38a50b5eab']);
+  checks.push(['вектор: view pub', v.viewPub === '58cdf6b28afa805423cf410d78bf908a416eaea1a2eef05def1aae4b7596f3de']);
+  checks.push(['вектор: адрес', v.address === '44bUDLb1Fb8WX3YoikyhCnb2gK86q9RGuh2ainXfMtUMVfHDELAP8FyF5GDCFDuKRyQ8FeGj2QkMuGiH6RgrhN4aS87C6VR']);
+  const bad = v.address.slice(0,40) + (v.address[40]==='A'?'B':'A') + v.address.slice(41);
+  checks.push(['детектор опечаток', !C.verifyAddressChecksum(bad)]);
+  return checks;
+}
+
+function generate(){
+  const entropy = new Uint8Array(64);
+  crypto.getRandomValues(entropy);
+  // Дополнительно мешаем время/счётчик — всё равно локально, без сети.
+  const extra = new Uint8Array(8); crypto.getRandomValues(extra);
+  const mix = new Uint8Array(72); mix.set(entropy); mix.set(extra, 64);
+  const w = C.walletFromSpend(C.keccak256(mix), WORDS);
+  if (!C.verifyAddressChecksum(w.address)) throw new Error('checksum failed');
+  const back = C.walletFromMnemonic(w.mnemonic, WORDS);
+  if (back.address !== w.address || back.mnemonic !== w.mnemonic) throw new Error('restore failed');
+  current = w;
+  $('addrText').textContent = w.address;
+  $('seedText').textContent = w.mnemonic;
+  $('spendText').textContent = w.spendKey;
+  $('viewText').textContent = w.viewKey;
+  $('addrCheck').textContent = '✓ контрольная сумма Keccak верна · адрес 95 символов · mainnet · сид-фраза восстанавливается';
+  $('result').classList.remove('hidden');
+  $('checkSeed').value = w.mnemonic;
+  $('checkOut').textContent = '';
+  $('result').scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+async function copy(id){
+  const text = $(id+'Text').textContent;
+  try { await navigator.clipboard.writeText(text); toast('Скопировано'); }
+  catch(e){ const r=document.createRange(); r.selectNodeContents($(id+'Text')); const s=getSelection(); s.removeAllRanges(); s.addRange(r); toast('Выдели текст и нажми Ctrl+C'); }
+}
+let toastTimer;
+function toast(t){
+  let e=$('toast'); if(!e){ e=document.createElement('div'); e.id='toast'; e.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#10131d;border:1px solid #2ff0cf;color:#2ff0cf;padding:10px 18px;border-radius:10px;font:12px ui-monospace,Menlo,Consolas,monospace;z-index:9'; document.body.appendChild(e); }
+  e.textContent=t; clearTimeout(toastTimer); toastTimer=setTimeout(()=>e.remove(),1800);
+}
+
+function backup(){
+  if(!current) return;
+  const lines = [
+    'NeonMiner Wallet — БЭКАП. ХРАНИ ОФЛАЙН. НИКОМУ НЕ ПОКАЗЫВАЙ.',
+    'Сгенерировано: ' + new Date().toISOString(),
+    '',
+    'XMR address  : ' + current.address,
+    '',
+    'Mnemonic seed (25 English words, standard Monero):',
+    current.mnemonic,
+    '',
+    'Private spend key: ' + current.spendKey,
+    'Private view key : ' + current.viewKey,
+    '',
+    'Public spend key : ' + current.spendPub,
+    'Public view key  : ' + current.viewPub,
+    '',
+    'Restore: Monero GUI / Cake Wallet / Feather -> "Restore from seed" (25 words).',
+    'Mining: paste the address into NeonMiner.exe. Never use an exchange deposit address.',
+  ].join('\n');
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([lines],{type:'text/plain;charset=utf-8'}));
+  a.download='neonminer-wallet-BACKUP.txt'; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+
+function check(){
+  const phrase = $('checkSeed').value.trim().toLowerCase().replace(/\s+/g,' ');
+  if(!phrase){ $('checkOut').textContent='Вставь 25 слов.'; return; }
+  try {
+    const w = C.walletFromMnemonic(phrase, WORDS);
+    const ok = C.verifyAddressChecksum(w.address);
+    $('checkOut').innerHTML = (ok?'✓ ':'✗ ') + 'адрес: <b style="color:#2ff0cf">' + esc(w.address) + '</b>'
+      + (current ? (w.address===current.address ? ' — совпадает с текущим кошельком ✓' : ' — НЕ совпадает с текущим!') : '');
+  } catch(e){ $('checkOut').textContent = 'Ошибка: ' + e.message + '. Проверь слова и порядок.'; }
+}
+
+document.addEventListener('DOMContentLoaded', function(){
+  const results = selftest();
+  const failed = results.filter(x=>!x[1]);
+  const pill = $('selftest');
+  if(failed.length){
+    pill.textContent = '● ОШИБКА: ' + failed.map(x=>x[0]).join(', ');
+    pill.className = 'pill bad';
+    $('genHint').textContent = 'Криптография не прошла проверку — генерация отключена. Не используй эту страницу.';
+    return;
+  }
+  pill.textContent = '● ОФЛАЙН · ' + results.length + '/8 проверок пройдено';
+  pill.className = 'pill ok';
+  $('genHint').textContent = 'Готово. Можно отключить интернет и генерировать.';
+  $('gen').disabled = false;
+  $('gen').addEventListener('click', ()=>{ try{ generate(); }catch(e){ toast('Ошибка: '+e.message); } });
+  $('again').addEventListener('click', generate);
+  $('download').addEventListener('click', backup);
+  $('print').addEventListener('click', ()=>window.print());
+  $('checkBtn').addEventListener('click', check);
+  document.querySelectorAll('[data-copy]').forEach(b=>b.addEventListener('click',()=>copy(b.dataset.copy)));
+});
+})();
+</script>
+</body>
+</html>

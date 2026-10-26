@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<!-- Жёсткий CSP: ни одного сетевого запроса. Ключи не могут покинуть страницу. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'">
+<title>NeonMiner · создать XMR-кошелёк офлайн</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#07090f;color:#e9eef7;font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;overflow-x:hidden}
+.glow{position:fixed;width:600px;height:600px;border-radius:50%;filter:blur(150px);opacity:.14;pointer-events:none;z-index:0}
+.ga{background:#2ff0cf;top:-240px;left:-180px}.gb{background:#9b6bff;top:300px;right:-240px}
+.wrap{position:relative;z-index:1;max-width:900px;margin:0 auto;padding:30px 22px 60px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding-bottom:16px;border-bottom:1px solid rgba(140,160,200,.14)}
+.brand{font-weight:800;letter-spacing:.14em}.brand span{color:#2ff0cf}
+.pill{font:11px ui-monospace,Menlo,Consolas,monospace;border:1px solid rgba(140,160,200,.2);padding:5px 11px;border-radius:20px;color:#8b95aa}
+.pill.ok{color:#2ff0cf;border-color:rgba(47,240,207,.4)}.pill.bad{color:#ff5f92;border-color:rgba(255,95,146,.5)}
+h1{font-size:clamp(27px,4vw,40px);letter-spacing:-.035em;margin:26px 0 10px;line-height:1.1}
+.accent{background:linear-gradient(95deg,#2ff0cf,#69b6ff 55%,#9b6bff);-webkit-background-clip:text;background-clip:text;color:transparent}
+.sub{color:#8b95aa;max-width:700px;margin:0 0 22px}
+.card{background:rgba(16,19,29,.8);border:1px solid rgba(140,160,200,.14);border-radius:16px;padding:20px;margin-bottom:18px}
+.warn{border-color:rgba(255,196,107,.35);background:rgba(255,196,107,.06);color:#f0dbb8}
+.warn h3{margin:0 0 8px;font-size:14px;color:#ffc46b}
+.warn ol{margin:8px 0 0;padding-left:20px}.warn li{margin:4px 0;font-size:12.5px}
+.btn{border:1px solid rgba(140,160,200,.2);background:rgba(255,255,255,.03);color:#e9eef7;border-radius:11px;padding:11px 17px;font:600 13px inherit;cursor:pointer;font-family:inherit}
+.btn:hover{border-color:#2ff0cf;color:#2ff0cf}
+.btn-main{background:linear-gradient(100deg,#2ff0cf,#3bb8ff);color:#04120f;border:0;padding:15px 28px;font-size:15px;box-shadow:0 8px 26px rgba(47,240,207,.2)}
+.btn-main:hover{color:#04120f;filter:brightness(1.1)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.lbl{font:10px ui-monospace,Menlo,Consolas,monospace;letter-spacing:.14em;text-transform:uppercase;color:#8b95aa;display:block;margin:0 0 7px}
+.out{background:#04060a;border:1px solid rgba(140,160,200,.16);border-radius:11px;padding:13px 15px;font:13px/1.7 ui-monospace,Menlo,Consolas,monospace;word-break:break-all;color:#c8d6e5;position:relative}
+.out.addr{font-size:15px;color:#2ff0cf;border-color:rgba(47,240,207,.35);padding:16px}
+.out.seed{font-size:14px;line-height:2;color:#e9eef7}
+.out.small{font-size:11px;color:#8b95aa}
+.copy{position:absolute;top:8px;right:8px;border:1px solid rgba(140,160,200,.2);background:#10131d;color:#2ff0cf;border-radius:7px;padding:4px 9px;font:10px ui-monospace,Menlo,Consolas,monospace;cursor:pointer}
+.copy:hover{border-color:#2ff0cf}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.hint{font-size:11.5px;color:#8b95aa;margin-top:8px}
+.hidden{display:none!important}
+.steps{counter-reset:s;list-style:none;padding:0;margin:0}
+.steps li{counter-increment:s;position:relative;padding-left:34px;margin-bottom:12px;font-size:13px;color:#c8d6e5}
+.steps li::before{content:counter(s);position:absolute;left:0;top:1px;width:22px;height:22px;border:1px solid rgba(47,240,207,.4);color:#2ff0cf;border-radius:50%;display:grid;place-items:center;font:11px ui-monospace,Menlo,Consolas,monospace}
+input,textarea{width:100%;background:#04060a;border:1px solid rgba(140,160,200,.16);color:#e9eef7;border-radius:10px;padding:11px 13px;font:13px ui-monospace,Menlo,Consolas,monospace;outline:none}
+input:focus,textarea:focus{border-color:#2ff0cf}
+.foot{border-top:1px solid rgba(140,160,200,.14);margin-top:26px;padding-top:16px;color:#8b95aa;font-size:11.5px}
+a{color:#2ff0cf}
+@media(max-width:640px){.grid2{grid-template-columns:1fr}}
+@media print{body{background:#fff;color:#000}.glow{display:none}.btn,.copy,.top .pill{display:none}.card{border:1px solid #999;background:#fff;color:#000;break-inside:avoid}.out{background:#f6f6f6;color:#000}.out.addr,.out.seed{color:#000}}
+</style>
+</head>
+<body>
+<div class="glow ga"></div><div class="glow gb"></div>
+<div class="wrap">
+  <div class="top">
+    <div class="brand"><span>◈</span> NEON<span style="color:#9b6bff">//</span>WALLET</div>
+    <span class="pill" id="selftest">● проверяю криптографию…</span>
+  </div>
+
+  <h1>Создай XMR-кошелёк<br><span class="accent">за 10 секунд, офлайн.</span></h1>
+  <p class="sub">Эта страница генерирует настоящий Monero-кошелёк прямо в твоём браузере.
+    Ключи не отправляются никуда: CSP запрещает любые сетевые запросы, а в коде нет ни одного fetch.
+    Полученный адрес вставляешь в <b>NeonMiner.exe</b> — и монетки капают твоему кошельку.</p>
+
+  <div class="card warn">
+    <h3>⚠ Это самое важное</h3>
+    <ol>
+      <li><b>25 слов = все твои деньги.</b> Кто знает сид-фразу — тот владеет монетами. Запиши её на бумаге, не фотографируй и не сохраняй в облако/мессенджер.</li>
+      <li>Для полной уверенности <b>отключи интернет</b> на время генерации, сохрани страницу и распечатай бэкап.</li>
+      <li>Никогда не отправляй сид-фразу мне, в поддержку пула или кому-либо ещё. Настоящая поддержка её не спрашивает.</li>
+      <li><b>Не используй адрес биржи.</b> Майнинг-выплаты на депозитные адреса часто теряются. Нужен именно этот кошелёк.</li>
+      <li>Проверь восстановление: введи сид внизу страницы и убедись, что адрес совпал. Сначала отправь tiny-сумму, потом майни.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <span class="lbl">Шаг 1 · генерация</span>
+    <div class="row">
+      <button class="btn btn-main" id="gen" disabled>🎲 Создать кошелёк</button>
+      <span class="hint" id="genHint">Идёт проверка криптографии…</span>
+    </div>
+  </div>
+
+  <div id="result" class="hidden">
+    <div class="card">
+      <span class="lbl">Твой XMR-адрес — вставь его в NeonMiner.exe</span>
+      <div class="out addr" id="addr"><button class="copy" data-copy="addr">копировать</button><span id="addrText"></span></div>
+      <div class="hint" id="addrCheck"></div>
+    </div>
+
+    <div class="card">
+      <span class="lbl">Сид-фраза · 25 слов Monero (English)</span>
+      <div class="out seed" id="seed"><button class="copy" data-copy="seed">копировать</button><span id="seedText"></span></div>
+      <div class="hint">Стандартный формат Monero — подходит для восстановления в Monero GUI, Cake Wallet, Feather, Monerujo.</div>
+    </div>
+
+    <div class="card">
+      <span class="lbl">Приватные ключи · для восстановления «по ключам»</span>
+      <div class="grid2">
+        <div><span class="lbl">spend key</span><div class="out small" id="spend"><button class="copy" data-copy="spend">копировать</button><span id="spendText"></span></div></div>
+        <div><span class="lbl">view key</span><div class="out small" id="view"><button class="copy" data-copy="view">копировать</button><span id="viewText"></span></div></div>
+      </div>
+      <div class="row" style="margin-top:16px">
+        <button class="btn" id="download">↓ Скачать бэкап .txt</button>
+        <button class="btn" id="print">🖨 Распечатать</button>
+        <button class="btn" id="again">🔄 Создать ещё один</button>
+      </div>
+      <div class="hint">Бэкап-файл содержит приватные ключи — храни его офлайн и не пересылай.</div>
+    </div>
+
+    <div class="card">
+      <span class="lbl">Шаг 2 · что делать дальше</span>
+      <ol class="steps">
+        <li>Скопируй <b>адрес</b> выше и вставь в поле «Твой Monero (XMR) адрес» в NeonMiner.exe.</li>
+        <li>Поставь галочку согласия и нажми «▶ Начать майнинг». Пул C3Pool заплатит на этот адрес.</li>
+        <li>Сид-фразу и ключи сохрани на бумаге. Если диск умрёт — деньги восстановятся по 25 словам.</li>
+        <li>Чтобы увидеть баланс: открой Monero GUI / Cake Wallet → «Restore wallet from seed» → введи 25 слов.</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="lbl">Проверка сид-фразы (можно ввести свою)</span>
+    <textarea id="checkSeed" rows="2" placeholder="вставь 25 слов через пробел — и увидишь, какой адрес из них получится"></textarea>
+    <div class="row" style="margin-top:10px"><button class="btn" id="checkBtn">Проверить</button><span class="hint" id="checkOut"></span></div>
+  </div>
+
+  <div class="foot">
+    NeonMiner Wallet · офлайн-генератор, без зависимостей и сети · совместим с официальным форматом Monero.<br>
+    Криптография сверена с <code>monero-project/monero</code> и независимым пакетом <code>monero</code>:
+    Keccak-256, ed25519, sc_reduce32, Base58, 1626 слов, CRC32-контрольное слово.
+  </div>
+</div>
+
+<script>
+window.NM_WORDS = ["abbey","abducts","ability","ablaze","abnormal","abort","abrasive","absorb","abyss","academy","aces","aching","acidic","acoustic","acquire","across","actress","acumen","adapt","addicted","adept","adhesive","adjust","adopt","adrenalin","adult","adventure","aerial","afar","affair","afield","afloat","afoot","afraid","after","against","agenda","aggravate","agile","aglow","agnostic","agony","agreed","ahead","aided","ailments","aimless","airport","aisle","ajar","akin","alarms","album","alchemy","alerts","algebra","alkaline","alley","almost","aloof","alpine","already","also","altitude","alumni","always","amaze","ambush","amended","amidst","ammo","amnesty","among","amply","amused","anchor","android","anecdote","angled","ankle","annoyed","answers","antics","anvil","anxiety","anybody","apart","apex","aphid","aplomb","apology","apply","apricot","aptitude","aquarium","arbitrary","archer","ardent","arena","argue","arises","army","around","arrow","arsenic","artistic","ascend","ashtray","aside","asked","asleep","aspire","assorted","asylum","athlete","atlas","atom","atrium","attire","auburn","auctions","audio","august","aunt","austere","autumn","avatar","avidly","avoid","awakened","awesome","awful","awkward","awning","awoken","axes","axis","axle","aztec","azure","baby","bacon","badge","baffles","bagpipe","bailed","bakery","balding","bamboo","banjo","baptism","basin","batch","bawled","bays","because","beer","befit","begun","behind","being","below","bemused","benches","berries","bested","betting","bevel","beware","beyond","bias","bicycle","bids","bifocals","biggest","bikini","bimonthly","binocular","biology","biplane","birth","biscuit","bite","biweekly","blender","blip","bluntly","boat","bobsled","bodies","bogeys","boil","boldly","bomb","border","boss","both","bounced","bovine","bowling","boxes","boyfriend","broken","brunt","bubble","buckets","budget","buffet","bugs","building","bulb","bumper","bunch","business","butter","buying","buzzer","bygones","byline","bypass","cabin","cactus","cadets","cafe","cage","cajun","cake","calamity","camp","candy","casket","catch","cause","cavernous","cease","cedar","ceiling","cell","cement","cent","certain","chlorine","chrome","cider","cigar","cinema","circle","cistern","citadel","civilian","claim","click","clue","coal","cobra","cocoa","code","coexist","coffee","cogs","cohesive","coils","colony","comb","cool","copy","corrode","costume","cottage","cousin","cowl","criminal","cube","cucumber","cuddled","cuffs","cuisine","cunning","cupcake","custom","cycling","cylinder","cynical","dabbing","dads","daft","dagger","daily","damp","dangerous","dapper","darted","dash","dating","dauntless","dawn","daytime","dazed","debut","decay","dedicated","deepest","deftly","degrees","dehydrate","deity","dejected","delayed","demonstrate","dented","deodorant","depth","desk","devoid","dewdrop","dexterity","dialect","dice","diet","different","digit","dilute","dime","dinner","diode","diplomat","directed","distance","ditch","divers","dizzy","doctor","dodge","does","dogs","doing","dolphin","domestic","donuts","doorway","dormant","dosage","dotted","double","dove","down","dozen","dreams","drinks","drowning","drunk","drying","dual","dubbed","duckling","dude","duets","duke","dullness","dummy","dunes","duplex","duration","dusted","duties","dwarf","dwelt","dwindling","dying","dynamite","dyslexic","each","eagle","earth","easy","eating","eavesdrop","eccentric","echo","eclipse","economics","ecstatic","eden","edgy","edited","educated","eels","efficient","eggs","egotistic","eight","either","eject","elapse","elbow","eldest","eleven","elite","elope","else","eluded","emails","ember","emerge","emit","emotion","empty","emulate","energy","enforce","enhanced","enigma","enjoy","enlist","enmity","enough","enraged","ensign","entrance","envy","epoxy","equip","erase","erected","erosion","error","eskimos","espionage","essential","estate","etched","eternal","ethics","etiquette","evaluate","evenings","evicted","evolved","examine","excess","exhale","exit","exotic","exquisite","extra","exult","fabrics","factual","fading","fainted","faked","fall","family","fancy","farming","fatal","faulty","fawns","faxed","fazed","feast","february","federal","feel","feline","females","fences","ferry","festival","fetches","fever","fewest","fiat","fibula","fictional","fidget","fierce","fifteen","fight","films","firm","fishing","fitting","five","fixate","fizzle","fleet","flippant","flying","foamy","focus","foes","foggy","foiled","folding","fonts","foolish","fossil","fountain","fowls","foxes","foyer","framed","friendly","frown","fruit","frying","fudge","fuel","fugitive","fully","fuming","fungal","furnished","fuselage","future","fuzzy","gables","gadget","gags","gained","galaxy","gambit","gang","gasp","gather","gauze","gave","gawk","gaze","gearbox","gecko","geek","gels","gemstone","general","geometry","germs","gesture","getting","geyser","ghetto","ghost","giant","giddy","gifts","gigantic","gills","gimmick","ginger","girth","giving","glass","gleeful","glide","gnaw","gnome","goat","goblet","godfather","goes","goggles","going","goldfish","gone","goodbye","gopher","gorilla","gossip","gotten","gourmet","governing","gown","greater","grunt","guarded","guest","guide","gulp","gumball","guru","gusts","gutter","guys","gymnast","gypsy","gyrate","habitat","hacksaw","haggled","hairy","hamburger","happens","hashing","hatchet","haunted","having","hawk","haystack","hazard","hectare","hedgehog","heels","hefty","height","hemlock","hence","heron","hesitate","hexagon","hickory","hiding","highway","hijack","hiker","hills","himself","hinder","hippo","hire","history","hitched","hive","hoax","hobby","hockey","hoisting","hold","honked","hookup","hope","hornet","hospital","hotel","hounded","hover","howls","hubcaps","huddle","huge","hull","humid","hunter","hurried","husband","huts","hybrid","hydrogen","hyper","iceberg","icing","icon","identity","idiom","idled","idols","igloo","ignore","iguana","illness","imagine","imbalance","imitate","impel","inactive","inbound","incur","industrial","inexact","inflamed","ingested","initiate","injury","inkling","inline","inmate","innocent","inorganic","input","inquest","inroads","insult","intended","inundate","invoke","inwardly","ionic","irate","iris","irony","irritate","island","isolated","issued","italics","itches","items","itinerary","itself","ivory","jabbed","jackets","jaded","jagged","jailed","jamming","january","jargon","jaunt","javelin","jaws","jazz","jeans","jeers","jellyfish","jeopardy","jerseys","jester","jetting","jewels","jigsaw","jingle","jittery","jive","jobs","jockey","jogger","joining","joking","jolted","jostle","journal","joyous","jubilee","judge","juggled","juicy","jukebox","july","jump","junk","jury","justice","juvenile","kangaroo","karate","keep","kennel","kept","kernels","kettle","keyboard","kickoff","kidneys","king","kiosk","kisses","kitchens","kiwi","knapsack","knee","knife","knowledge","knuckle","koala","laboratory","ladder","lagoon","lair","lakes","lamb","language","laptop","large","last","later","launching","lava","lawsuit","layout","lazy","lectures","ledge","leech","left","legion","leisure","lemon","lending","leopard","lesson","lettuce","lexicon","liar","library","licks","lids","lied","lifestyle","light","likewise","lilac","limits","linen","lion","lipstick","liquid","listen","lively","loaded","lobster","locker","lodge","lofty","logic","loincloth","long","looking","lopped","lordship","losing","lottery","loudly","love","lower","loyal","lucky","luggage","lukewarm","lullaby","lumber","lunar","lurk","lush","luxury","lymph","lynx","lyrics","macro","madness","magically","mailed","major","makeup","malady","mammal","maps","masterful","match","maul","maverick","maximum","mayor","maze","meant","mechanic","medicate","meeting","megabyte","melting","memoir","menu","merger","mesh","metro","mews","mice","midst","mighty","mime","mirror","misery","mittens","mixture","moat","mobile","mocked","mohawk","moisture","molten","moment","money","moon","mops","morsel","mostly","motherly","mouth","movement","mowing","much","muddy","muffin","mugged","mullet","mumble","mundane","muppet","mural","musical","muzzle","myriad","mystery","myth","nabbing","nagged","nail","names","nanny","napkin","narrate","nasty","natural","nautical","navy","nearby","necklace","needed","negative","neither","neon","nephew","nerves","nestle","network","neutral","never","newt","nexus","nibs","niche","niece","nifty","nightly","nimbly","nineteen","nirvana","nitrogen","nobody","nocturnal","nodes","noises","nomad","noodles","northern","nostril","noted","nouns","novelty","nowhere","nozzle","nuance","nucleus","nudged","nugget","nuisance","null","number","nuns","nurse","nutshell","nylon","oaks","oars","oasis","oatmeal","obedient","object","obliged","obnoxious","observant","obtains","obvious","occur","ocean","october","odds","odometer","offend","often","oilfield","ointment","okay","older","olive","olympics","omega","omission","omnibus","onboard","oncoming","oneself","ongoing","onion","online","onslaught","onto","onward","oozed","opacity","opened","opposite","optical","opus","orange","orbit","orchid","orders","organs","origin","ornament","orphans","oscar","ostrich","otherwise","otter","ouch","ought","ounce","ourselves","oust","outbreak","oval","oven","owed","owls","owner","oxidant","oxygen","oyster","ozone","pact","paddles","pager","pairing","palace","pamphlet","pancakes","paper","paradise","pastry","patio","pause","pavements","pawnshop","payment","peaches","pebbles","peculiar","pedantic","peeled","pegs","pelican","pencil","people","pepper","perfect","pests","petals","phase","pheasants","phone","phrases","physics","piano","picked","pierce","pigment","piloted","pimple","pinched","pioneer","pipeline","pirate","pistons","pitched","pivot","pixels","pizza","playful","pledge","pliers","plotting","plus","plywood","poaching","pockets","podcast","poetry","point","poker","polar","ponies","pool","popular","portents","possible","potato","pouch","poverty","powder","pram","present","pride","problems","pruned","prying","psychic","public","puck","puddle","puffin","pulp","pumpkins","punch","puppy","purged","push","putty","puzzled","pylons","pyramid","python","queen","quick","quote","rabbits","racetrack","radar","rafts","rage","railway","raking","rally","ramped","randomly","rapid","rarest","rash","rated","ravine","rays","razor","react","rebel","recipe","reduce","reef","refer","regular","reheat","reinvest","rejoices","rekindle","relic","remedy","renting","reorder","repent","request","reruns","rest","return","reunion","revamp","rewind","rhino","rhythm","ribbon","richly","ridges","rift","rigid","rims","ringing","riots","ripped","rising","ritual","river","roared","robot","rockets","rodent","rogue","roles","romance","roomy","roped","roster","rotate","rounded","rover","rowboat","royal","ruby","rudely","ruffled","rugged","ruined","ruling","rumble","runway","rural","rustled","ruthless","sabotage","sack","sadness","safety","saga","sailor","sake","salads","sample","sanity","sapling","sarcasm","sash","satin","saucepan","saved","sawmill","saxophone","sayings","scamper","scenic","school","science","scoop","scrub","scuba","seasons","second","sedan","seeded","segments","seismic","selfish","semifinal","sensible","september","sequence","serving","session","setup","seventh","sewage","shackles","shelter","shipped","shocking","shrugged","shuffled","shyness","siblings","sickness","sidekick","sieve","sifting","sighting","silk","simplest","sincerely","sipped","siren","situated","sixteen","sizes","skater","skew","skirting","skulls","skydive","slackens","sleepless","slid","slower","slug","smash","smelting","smidgen","smog","smuggled","snake","sneeze","sniff","snout","snug","soapy","sober","soccer","soda","software","soggy","soil","solved","somewhere","sonic","soothe","soprano","sorry","southern","sovereign","sowed","soya","space","speedy","sphere","spiders","splendid","spout","sprig","spud","spying","square","stacking","stellar","stick","stockpile","strained","stunning","stylishly","subtly","succeed","suddenly","suede","suffice","sugar","suitcase","sulking","summon","sunken","superior","surfer","sushi","suture","swagger","swept","swiftly","sword","swung","syllabus","symptoms","syndrome","syringe","system","taboo","tacit","tadpoles","tagged","tail","taken","talent","tamper","tanks","tapestry","tarnished","tasked","tattoo","taunts","tavern","tawny","taxi","teardrop","technical","tedious","teeming","tell","template","tender","tepid","tequila","terminal","testing","tether","textbook","thaw","theatrics","thirsty","thorn","threaten","thumbs","thwart","ticket","tidy","tiers","tiger","tilt","timber","tinted","tipsy","tirade","tissue","titans","toaster","tobacco","today","toenail","toffee","together","toilet","token","tolerant","tomorrow","tonic","toolbox","topic","torch","tossed","total","touchy","towel","toxic","toyed","trash","trendy","tribal","trolling","truth","trying","tsunami","tubes","tucks","tudor","tuesday","tufts","tugs","tuition","tulips","tumbling","tunnel","turnip","tusks","tutor","tuxedo","twang","tweezers","twice","twofold","tycoon","typist","tyrant","ugly","ulcers","ultimate","umbrella","umpire","unafraid","unbending","uncle","under","uneven","unfit","ungainly","unhappy","union","unjustly","unknown","unlikely","unmask","unnoticed","unopened","unplugs","unquoted","unrest","unsafe","until","unusual","unveil","unwind","unzip","upbeat","upcoming","update","upgrade","uphill","upkeep","upload","upon","upper","upright","upstairs","uptight","upwards","urban","urchins","urgent","usage","useful","usher","using","usual","utensils","utility","utmost","utopia","uttered","vacation","vague","vain","value","vampire","vane","vapidly","vary","vastness","vats","vaults","vector","veered","vegan","vehicle","vein","velvet","venomous","verification","vessel","veteran","vexed","vials","vibrate","victim","video","viewpoint","vigilant","viking","village","vinegar","violin","vipers","virtual","visited","vitals","vivid","vixen","vocal","vogue","voice","volcano","vortex","voted","voucher","vowels","voyage","vulture","wade","waffle","wagtail","waist","waking","wallets","wanted","warped","washing","water","waveform","waxing","wayside","weavers","website","wedge","weekday","weird","welders","went","wept","were","western","wetsuit","whale","when","whipped","whole","wickets","width","wield","wife","wiggle","wildly","winter","wipeout","wiring","wise","withdrawn","wives","wizard","wobbly","woes","woken","wolf","womanly","wonders","woozy","worry","wounded","woven","wrap","wrist","wrong","yacht","yahoo","yanks","yard","yawning","yearbook","yellow","yesterday","yeti","yields","yodel","yoga","younger","yoyo","zapped","zeal","zebra","zero","zesty","zigzags","zinger","zippers","zodiac","zombie","zones","zoom"];
+/* NeonMiner Wallet — криптография Monero на чистом JS (без зависимостей, без сети).
+ *
+ * Реализовано по исходникам monero-project/monero:
+ *   src/crypto/crypto.cpp           generate_keys(): sc_reduce32 + ge_scalarmult_base
+ *   src/cryptonote_basic/account.cpp generate(): viewkey = sc_reduce32(keccak(spendkey))
+ *   src/mnemonics/electrum-words.cpp bytes_to_words(): 4 байта -> 3 слова + CRC32-слово
+ *   src/mnemonics/english.h         wordlist из 1626 слов, unique_prefix_length = 3
+ *
+ * Всё считается на BigInt. Ни один вызов не делает сетевых запросов.
+ */
+(function (global) {
+  'use strict';
+
+  /* ------------------------------ Keccak-256 ------------------------------ */
+  const MASK = (1n << 64n) - 1n;
+  const RC = [
+    0x0000000000000001n, 0x0000000000008082n, 0x800000000000808an, 0x8000000080008000n,
+    0x000000000000808bn, 0x0000000080000001n, 0x8000000080008081n, 0x8000000000008009n,
+    0x000000000000008an, 0x0000000000000088n, 0x0000000080008009n, 0x000000008000000an,
+    0x000000008000808bn, 0x800000000000008bn, 0x8000000000008089n, 0x8000000000008003n,
+    0x8000000000008002n, 0x8000000000000080n, 0x000000000000800an, 0x800000008000000an,
+    0x8000000080008081n, 0x8000000000008080n, 0x0000000080000001n, 0x8000000080008008n,
+  ];
+  const ROT = [
+    [0, 36, 3, 41, 18], [1, 44, 10, 45, 2], [62, 6, 43, 15, 61],
+    [28, 55, 25, 21, 56], [27, 20, 39, 8, 14],
+  ];
+  const rol = (v, n) => {
+    n %= 64;
+    if (!n) return v & MASK;
+    return ((v << BigInt(n)) | (v >> BigInt(64 - n))) & MASK;
+  };
+  function keccakF(a) {
+    for (let rnd = 0; rnd < 24; rnd++) {
+      const c = [0n, 0n, 0n, 0n, 0n], d = [0n, 0n, 0n, 0n, 0n];
+      for (let x = 0; x < 5; x++) c[x] = a[x][0] ^ a[x][1] ^ a[x][2] ^ a[x][3] ^ a[x][4];
+      for (let x = 0; x < 5; x++) d[x] = c[(x + 4) % 5] ^ rol(c[(x + 1) % 5], 1);
+      for (let x = 0; x < 5; x++) for (let y = 0; y < 5; y++) a[x][y] ^= d[x];
+      const b = [[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n]];
+      for (let x = 0; x < 5; x++) for (let y = 0; y < 5; y++) b[y][(2 * x + 3 * y) % 5] = rol(a[x][y], ROT[x][y]);
+      for (let x = 0; x < 5; x++) for (let y = 0; y < 5; y++) a[x][y] = b[x][y] ^ ((~b[(x + 1) % 5][y] & MASK) & b[(x + 2) % 5][y]);
+      a[0][0] ^= RC[rnd];
+    }
+    return a;
+  }
+  function keccak256(bytes) {
+    const rate = 136;
+    const padded = new Uint8Array(Math.ceil((bytes.length + 1) / rate) * rate);
+    padded.set(bytes);
+    padded[bytes.length] = 0x01;
+    padded[padded.length - 1] |= 0x80;
+    const a = [[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n]];
+    for (let off = 0; off < padded.length; off += rate) {
+      for (let i = 0; i < rate / 8; i++) {
+        let lane = 0n;
+        for (let j = 0; j < 8; j++) lane |= BigInt(padded[off + i * 8 + j]) << BigInt(8 * j);
+        a[i % 5][Math.floor(i / 5)] ^= lane;
+      }
+      keccakF(a);
+    }
+    const out = new Uint8Array(32);
+    for (let i = 0; i < 4; i++) {
+      const lane = a[i % 5][Math.floor(i / 5)];
+      for (let j = 0; j < 8; j++) out[i * 8 + j] = Number((lane >> BigInt(8 * j)) & 0xffn);
+    }
+    return out;
+  }
+
+  /* -------------------------- поле ed25519 / точка -------------------------- */
+  const P = (1n << 255n) - 19n;
+  const L = (1n << 252n) + 27742317777372353535851937790883648493n;
+  const mod = (v) => { const r = v % P; return r < 0n ? r + P : r; };
+  function powMod(base, exp) {
+    let r = 1n, a = mod(base);
+    while (exp > 0n) { if (exp & 1n) r = mod(r * a); a = mod(a * a); exp >>= 1n; }
+    return r;
+  }
+  const inv = (v) => powMod(v, P - 2n);
+  const D = mod(-121665n * inv(121666n));
+  const BX = 15112221349535400772501151409588531511454012693041857206046113283949847762202n;
+  const BY = 46316835694926478169428394003475163141307993866256225615783033603165251855960n;
+  const ID = [0n, 1n, 1n, 0n];                 // [X,Y,Z,T]
+  const BASE = [BX, BY, 1n, mod(BX * BY)];
+
+  function pointAdd(p1, p2) {
+    const [X1, Y1, Z1, T1] = p1, [X2, Y2, Z2, T2] = p2;
+    const A = mod((Y1 - X1) * (Y2 - X2));
+    const B = mod((Y1 + X1) * (Y2 + X2));
+    const C = mod(2n * D * T1 * T2);
+    const Dd = mod(2n * Z1 * Z2);
+    const E = mod(B - A), F = mod(Dd - C), G = mod(Dd + C), H = mod(B + A);
+    return [mod(E * F), mod(G * H), mod(F * G), mod(E * H)];
+  }
+  function scalarMultBase(scalar /* Uint8Array 32, little endian */) {
+    let n = 0n;
+    for (let i = 31; i >= 0; i--) n = (n << 8n) | BigInt(scalar[i]);
+    let r = ID, q = BASE;
+    for (let i = 0; i < 256; i++) {
+      if ((n >> BigInt(i)) & 1n) r = pointAdd(r, q);
+      q = pointAdd(q, q);
+    }
+    return r;
+  }
+  function encodePoint(p) {
+    const [X, Y, Z] = p, zi = inv(Z);
+    const x = mod(X * zi), y = mod(Y * zi);
+    const out = new Uint8Array(32);
+    for (let j = 0; j < 32; j++) out[j] = Number((y >> BigInt(8 * j)) & 0xffn);
+    out[31] |= Number(x & 1n) << 7;             // sign bit = parity of x
+    return out;
+  }
+  function scReduce32(bytes /* Uint8Array 32 LE */) {
+    let n = 0n;
+    for (let i = 31; i >= 0; i--) n = (n << 8n) | BigInt(bytes[i]);
+    const r = n % L, out = new Uint8Array(32);
+    for (let i = 0; i < 32; i++) out[i] = Number((r >> BigInt(8 * i)) & 0xffn);
+    return out;
+  }
+
+  /* ------------------------------ Base58 Monero ------------------------------ */
+  const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  const ENC = [0, 2, 3, 5, 6, 7, 9, 10, 11];
+  function b58encode(bytes) {
+    let s = '';
+    for (let pos = 0; pos < bytes.length;) {
+      const rem = bytes.length - pos, dec = rem >= 8 ? 8 : rem;
+      const enc = dec === 8 ? 11 : ENC[dec];
+      let num = 0n;
+      for (let i = 0; i < dec; i++) num = (num << 8n) | BigInt(bytes[pos + i]);
+      const tmp = new Array(enc).fill(B58[0]);
+      for (let i = enc - 1; i >= 0; i--) { tmp[i] = B58[Number(num % 58n)]; num /= 58n; }
+      s += tmp.join('');
+      pos += dec;
+    }
+    return s;
+  }
+  function b58decode(s) {
+    let out = [];
+    for (let pos = 0; pos < s.length;) {
+      const rem = s.length - pos, enc = rem >= 11 ? 11 : rem;
+      let dec = enc === 11 ? 8 : ENC.indexOf(enc);
+      if (dec < 0) throw new Error('bad base58 block');
+      let num = 0n;
+      for (let i = 0; i < enc; i++) { const v = B58.indexOf(s[pos + i]); if (v < 0) throw new Error('bad base58 char'); num = num * 58n + BigInt(v); }
+      for (let i = 0; i < dec; i++) out.push(Number((num >> BigInt(8 * (dec - 1 - i))) & 0xffn));
+      pos += enc;
+    }
+    return Uint8Array.from(out);
+  }
+  function addressFromPubkeys(spendPub, viewPub) {
+    const data = new Uint8Array(65);
+    data[0] = 0x12;                              // mainnet primary address
+    data.set(spendPub, 1);
+    data.set(viewPub, 33);
+    const h = keccak256(data);
+    const full = new Uint8Array(69);
+    full.set(data); full.set(h.slice(0, 4), 65);
+    return b58encode(full);
+  }
+  function verifyAddressChecksum(addr) {
+    if (addr.length !== 95 && addr.length !== 106) return false;
+    let raw;
+    try { raw = b58decode(addr); } catch (e) { return false; }
+    if (raw.length !== 69 && raw.length !== 77) return false;
+    const h = keccak256(raw.slice(0, raw.length - 4));
+    for (let i = 0; i < 4; i++) if (h[i] !== raw[raw.length - 4 + i]) return false;
+    return raw[0] === 0x12 || raw[0] === 0x2a || raw[0] === 0x13;
+  }
+
+  /* ------------------------------ мнемоника ------------------------------ */
+  function crc32(str) {
+    const b = new TextEncoder().encode(str);
+    let c = 0xffffffff;
+    for (let i = 0; i < b.length; i++) {
+      c ^= b[i];
+      for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
+    }
+    return (c ^ 0xffffffff) >>> 0;
+  }
+  function bytesToWords(key, WORDS) {
+    const N = WORDS.length, out = [];
+    for (let i = 0; i < 8; i++) {
+      const v = (key[i * 4] | (key[i * 4 + 1] << 8) | (key[i * 4 + 2] << 16) | (key[i * 4 + 3] << 24)) >>> 0;
+      const w1 = v % N;
+      const w2 = (Math.floor(v / N) + w1) % N;
+      const w3 = (Math.floor(Math.floor(v / N) / N) + w2) % N;
+      out.push(WORDS[w1], WORDS[w2], WORDS[w3]);
+    }
+    let trimmed = '';
+    for (const w of out) trimmed += w.slice(0, 3);   // English unique_prefix_length = 3
+    out.push(out[crc32(trimmed) % 24]);
+    return out;
+  }
+  function wordsToBytes(words, WORDS) {
+    if (words.length !== 25) throw new Error('Нужно ровно 25 слов');
+    const N = WORDS.length, map = new Map(WORDS.map((w, i) => [w, i]));
+    const first = words.slice(0, 24);
+    let trimmed = '';
+    for (const w of first) trimmed += w.slice(0, 3);
+    if (words[24] !== first[crc32(trimmed) % 24]) throw new Error('Контрольное слово не совпадает — опечатка в сид-фразе');
+    const out = new Uint8Array(32);
+    for (let i = 0; i < 8; i++) {
+      const a = map.get(first[i * 3]), b = map.get(first[i * 3 + 1]), c = map.get(first[i * 3 + 2]);
+      if (a === undefined || b === undefined || c === undefined) throw new Error('Неизвестное слово в сид-фразе');
+      const d1 = ((b - a) % N + N) % N, d2 = ((c - b) % N + N) % N;
+      let v = a + N * d1 + N * N * d2;
+      for (let j = 0; j < 4; j++) out[i * 4 + j] = Math.floor(v / Math.pow(2, 8 * j)) & 0xff;
+    }
+    return out;
+  }
+
+  /* ------------------------------ сборка кошелька ------------------------------ */
+  const hex = (b) => Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+  const fromHex = (s) => Uint8Array.from(s.match(/../g).map(x => parseInt(x, 16)));
+
+  function walletFromSpend(spendScalar, WORDS) {
+    const spend = scReduce32(spendScalar);
+    const view = scReduce32(keccak256(spend));
+    const spendPub = encodePoint(scalarMultBase(spend));
+    const viewPub = encodePoint(scalarMultBase(view));
+    const address = addressFromPubkeys(spendPub, viewPub);
+    const mnemonic = bytesToWords(spend, WORDS);
+    return {
+      address,
+      mnemonic: mnemonic.join(' '),
+      mnemonicWords: mnemonic,
+      spendKey: hex(spend),
+      viewKey: hex(view),
+      spendPub: hex(spendPub),
+      viewPub: hex(viewPub),
+    };
+  }
+  function walletFromMnemonic(phrase, WORDS) {
+    const words = phrase.trim().toLowerCase().split(/\s+/);
+    const spend = scReduce32(wordsToBytes(words, WORDS));
+    return walletFromSpend(spend, WORDS);
+  }
+
+  global.NMWalletCrypto = {
+    keccak256, scReduce32, scalarMultBase, encodePoint, pointAdd,
+    b58encode, b58decode, addressFromPubkeys, verifyAddressChecksum,
+    crc32, bytesToWords, wordsToBytes, walletFromSpend, walletFromMnemonic,
+    hex, fromHex, L, P, D,
+  };
+})(typeof window !== 'undefined' ? window : globalThis);
+
+(function(){
+'use strict';
+const C = window.NMWalletCrypto, WORDS = window.NM_WORDS;
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const hex = b => Array.from(b, x => x.toString(16).padStart(2,'0')).join('');
+let current = null;
+
+function selftest(){
+  const enc = new TextEncoder();
+  const hx = b => hex(b);
+  const checks = [];
+  checks.push(['Keccak-256', hx(C.keccak256(enc.encode(''))) === 'c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470']);
+  checks.push(['Keccak-256 abc', hx(C.keccak256(enc.encode('abc'))) === '4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45']);
+  checks.push(['wordlist 1626', WORDS.length === 1626 && WORDS[1083] === 'plus']);
+  // Официальный тест-вектор: 25 x "plus" -> ключи и адрес из monero-project/monero.
+  const v = C.walletFromMnemonic(('plus '.repeat(24) + 'plus'), WORDS);
+  checks.push(['вектор: spend key', v.spendKey === '3b040000'.repeat(8)]);
+  checks.push(['вектор: view key', v.viewKey === '43a8a7715eed11eff145a2024ddcc39740255156da7bbd736ee66a0838053a02']);
+  checks.push(['вектор: spend pub', v.spendPub === '4e6b660ef63933b07a01786992185bcb721720feff611aef4eb0ac38a50b5eab']);
+  checks.push(['вектор: view pub', v.viewPub === '58cdf6b28afa805423cf410d78bf908a416eaea1a2eef05def1aae4b7596f3de']);
+  checks.push(['вектор: адрес', v.address === '44bUDLb1Fb8WX3YoikyhCnb2gK86q9RGuh2ainXfMtUMVfHDELAP8FyF5GDCFDuKRyQ8FeGj2QkMuGiH6RgrhN4aS87C6VR']);
+  const bad = v.address.slice(0,40) + (v.address[40]==='A'?'B':'A') + v.address.slice(41);
+  checks.push(['детектор опечаток', !C.verifyAddressChecksum(bad)]);
+  return checks;
+}
+
+function generate(){
+  const entropy = new Uint8Array(64);
+  crypto.getRandomValues(entropy);
+  // Дополнительно мешаем время/счётчик — всё равно локально, без сети.
+  const extra = new Uint8Array(8); crypto.getRandomValues(extra);
+  const mix = new Uint8Array(72); mix.set(entropy); mix.set(extra, 64);
+  const w = C.walletFromSpend(C.keccak256(mix), WORDS);
+  if (!C.verifyAddressChecksum(w.address)) throw new Error('checksum failed');
+  const back = C.walletFromMnemonic(w.mnemonic, WORDS);
+  if (back.address !== w.address || back.mnemonic !== w.mnemonic) throw new Error('restore failed');
+  current = w;
+  $('addrText').textContent = w.address;
+  $('seedText').textContent = w.mnemonic;
+  $('spendText').textContent = w.spendKey;
+  $('viewText').textContent = w.viewKey;
+  $('addrCheck').textContent = '✓ контрольная сумма Keccak верна · адрес 95 символов · mainnet · сид-фраза восстанавливается';
+  $('result').classList.remove('hidden');
+  $('checkSeed').value = w.mnemonic;
+  $('checkOut').textContent = '';
+  $('result').scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+async function copy(id){
+  const text = $(id+'Text').textContent;
+  try { await navigator.clipboard.writeText(text); toast('Скопировано'); }
+  catch(e){ const r=document.createRange(); r.selectNodeContents($(id+'Text')); const s=getSelection(); s.removeAllRanges(); s.addRange(r); toast('Выдели текст и нажми Ctrl+C'); }
+}
+let toastTimer;
+function toast(t){
+  let e=$('toast'); if(!e){ e=document.createElement('div'); e.id='toast'; e.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#10131d;border:1px solid #2ff0cf;color:#2ff0cf;padding:10px 18px;border-radius:10px;font:12px ui-monospace,Menlo,Consolas,monospace;z-index:9'; document.body.appendChild(e); }
+  e.textContent=t; clearTimeout(toastTimer); toastTimer=setTimeout(()=>e.remove(),1800);
+}
+
+function backup(){
+  if(!current) return;
+  const lines = [
+    'NeonMiner Wallet — БЭКАП. ХРАНИ ОФЛАЙН. НИКОМУ НЕ ПОКАЗЫВАЙ.',
+    'Сгенерировано: ' + new Date().toISOString(),
+    '',
+    'XMR address  : ' + current.address,
+    '',
+    'Mnemonic seed (25 English words, standard Monero):',
+    current.mnemonic,
+    '',
+    'Private spend key: ' + current.spendKey,
+    'Private view key : ' + current.viewKey,
+    '',
+    'Public spend key : ' + current.spendPub,
+    'Public view key  : ' + current.viewPub,
+    '',
+    'Restore: Monero GUI / Cake Wallet / Feather -> "Restore from seed" (25 words).',
+    'Mining: paste the address into NeonMiner.exe. Never use an exchange deposit address.',
+  ].join('\n');
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([lines],{type:'text/plain;charset=utf-8'}));
+  a.download='neonminer-wallet-BACKUP.txt'; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+
+function check(){
+  const phrase = $('checkSeed').value.trim().toLowerCase().replace(/\s+/g,' ');
+  if(!phrase){ $('checkOut').textContent='Вставь 25 слов.'; return; }
+  try {
+    const w = C.walletFromMnemonic(phrase, WORDS);
+    const ok = C.verifyAddressChecksum(w.address);
+    $('checkOut').innerHTML = (ok?'✓ ':'✗ ') + 'адрес: <b style="color:#2ff0cf">' + esc(w.address) + '</b>'
+      + (current ? (w.address===current.address ? ' — совпадает с текущим кошельком ✓' : ' — НЕ совпадает с текущим!') : '');
+  } catch(e){ $('checkOut').textContent = 'Ошибка: ' + e.message + '. Проверь слова и порядок.'; }
+}
+
+document.addEventListener('DOMContentLoaded', function(){
+  const results = selftest();
+  const failed = results.filter(x=>!x[1]);
+  const pill = $('selftest');
+  if(failed.length){
+    pill.textContent = '● ОШИБКА: ' + failed.map(x=>x[0]).join(', ');
+    pill.className = 'pill bad';
+    $('genHint').textContent = 'Криптография не прошла проверку — генерация отключена. Не используй эту страницу.';
+    return;
+  }
+  pill.textContent = '● ОФЛАЙН · ' + results.length + '/8 проверок пройдено';
+  pill.className = 'pill ok';
+  $('genHint').textContent = 'Готово. Можно отключить интернет и генерировать.';
+  $('gen').disabled = false;
+  $('gen').addEventListener('click', ()=>{ try{ generate(); }catch(e){ toast('Ошибка: '+e.message); } });
+  $('again').addEventListener('click', generate);
+  $('download').addEventListener('click', backup);
+  $('print').addEventListener('click', ()=>window.print());
+  $('checkBtn').addEventListener('click', check);
+  document.querySelectorAll('[data-copy]').forEach(b=>b.addEventListener('click',()=>copy(b.dataset.copy)));
+});
+})();
+</script>
+</body>
+</html>
