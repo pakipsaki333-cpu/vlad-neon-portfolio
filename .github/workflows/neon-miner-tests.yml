@@ -1,0 +1,50 @@
+name: neon-miner · тесты
+
+on:
+  push:
+    paths:
+      - "neon-miner/**"
+      - ".github/workflows/neon-miner-tests.yml"
+  pull_request:
+    paths:
+      - "neon-miner/**"
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Тесты ядра, адаптеров, конфигов и HTTP
+        working-directory: neon-miner
+        run: python3 -m unittest discover -s tests -v
+      - name: smoke · каталог пулов и калькулятор
+        working-directory: neon-miner
+        run: |
+          python3 -m neon_miner pools
+          python3 -m neon_miner profit --hashrate 5000 --watts 65 --kwh 0.36
+
+  build-exe:
+    name: кросс-сборка NeonMiner.exe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Zig/Clang (Windows target)
+        run: python3 -m pip install --quiet --target /tmp/zigpkg ziglang==0.17.0
+      - name: Сборка PE64 + 10 проверок selftest
+        working-directory: neon-miner
+        run: python3 windows/build_windows.py
+      - name: Тесты готового артефакта
+        working-directory: neon-miner
+        run: python3 -m unittest discover -s tests -v

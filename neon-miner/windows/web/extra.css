@@ -1,0 +1,20 @@
+/* Дополнительные стили для версии .exe (пульт управления майнером). */
+.control-card{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);gap:22px;
+  border-color:var(--line-strong);background:linear-gradient(120deg,rgba(47,240,207,.07),rgba(155,107,255,.05)),var(--card)}
+.control-card .step{margin-bottom:14px}
+.consent{font-size:12px;line-height:1.5;color:var(--text);align-items:flex-start;margin-bottom:16px}
+.consent input{margin-top:3px;width:15px;height:15px;flex:0 0 auto;accent-color:var(--cyan)}
+.control-buttons{display:flex;gap:11px;flex-wrap:wrap}
+.btn-big{padding:13px 22px;font-size:14px;border-radius:11px}
+#stopBtn{border-color:rgba(255,95,146,.4);color:var(--pink)}
+#stopBtn:hover{border-color:var(--pink);color:var(--pink)}
+.progress-line{margin-top:14px;font:12px var(--mono);color:var(--muted);min-height:20px}
+.progress-line.ok{color:var(--cyan)}.progress-line.err{color:var(--pink)}.progress-line.busy{color:var(--amber)}
+.control-path{margin-top:5px;font:10px var(--mono);color:var(--muted);word-break:break-all}
+.sim-note{margin-top:9px;color:var(--amber);border-left:2px solid var(--amber);padding-left:9px;line-height:1.5}
+.log{background:#04060a;border:1px solid var(--line);border-radius:10px;padding:12px;
+  height:172px;max-height:172px;overflow:auto;font:10.5px/1.55 var(--mono);color:#9fb3c8;white-space:pre-wrap;word-break:break-word}
+.log::-webkit-scrollbar{width:7px}.log::-webkit-scrollbar-thumb{background:rgba(120,150,190,.25);border-radius:5px}
+.pill.mining{color:var(--cyan);border-color:var(--line-strong);animation:pulse 1.8s infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(47,240,207,.0)}50%{box-shadow:0 0 0 4px rgba(47,240,207,.08)}}
+@media(max-width:900px){.control-card{grid-template-columns:1fr}}

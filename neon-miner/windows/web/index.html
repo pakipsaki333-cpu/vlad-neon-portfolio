@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>NeonMiner · Windows</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="glow glow-a"></div><div class="glow glow-b"></div><div class="grid-bg"></div>
+
+<header class="topbar">
+  <div class="brand"><span class="logo">◈</span><span class="brand-text">NEON<span class="brand-dim">//</span>MINER</span><span class="ver">EXE · Windows</span></div>
+  <div class="top-right">
+    <span class="pill pill-safe"><i></i> localhost only</span>
+    <span class="pill" id="minerPill">● майнер остановлен</span>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="hero">
+    <div>
+      <h1>Капалка XMR<br><span class="accent">в одном .exe.</span></h1>
+      <p class="sub">Впиши свой Monero-адрес, нажми <b>«Начать майнинг»</b> — программа сама
+        скачает официальный XMRig, проверит SHA256, соберёт конфиг и запустит майнер
+        на <b>этом</b> компьютере. Всё локально, без аккаунтов и облаков.</p>
+    </div>
+    <div class="hero-side">
+      <div class="ticker"><span class="ticker-label">XMR / EUR</span><span class="ticker-value" id="xmrPrice">—</span><span class="ticker-note" id="priceNote">курс пула</span></div>
+      <div class="ticker ticker-soft"><span class="ticker-label">сеть</span><span class="ticker-value small" id="netHash">~6.8 GH/s</span></div>
+    </div>
+  </section>
+
+  <div id="demoBanner" class="banner hidden"><span class="banner-tag">ДЕМО</span><span id="demoText"></span><button class="link-btn" id="demoHide">понятно</button></div>
+
+  <!-- ======================= ПУЛЬТ ======================= -->
+  <section class="card control-card">
+    <div class="control-left">
+      <div class="step"><span>01</span> Пульт майнинга</div>
+      <label class="check consent"><input type="checkbox" id="consent">
+        <span>Это мой компьютер, и я понимаю, что майнинг грузит CPU и тратит электричество</span></label>
+      <div class="control-buttons">
+        <button class="btn btn-primary btn-big" id="startBtn" disabled>▶ Начать майнинг</button>
+        <button class="btn btn-big" id="stopBtn" disabled>■ Стоп</button>
+      </div>
+      <div class="progress-line" id="startStatus">Готов к запуску. XMRig скачается при первом старте.</div>
+      <div class="control-path" id="workdirHint"></div>
+      <div class="control-path sim-note hidden" id="simNote"></div>
+    </div>
+    <div class="control-right">
+      <div class="step">Лог XMRig</div>
+      <pre class="log" id="minerLog">// здесь появится вывод майнера</pre>
+    </div>
+  </section>
+
+  <div class="layout">
+    <aside class="col-left">
+      <section class="card">
+        <div class="step"><span>02</span> Кошелёк</div>
+        <label class="field-label" for="wallet">Твой Monero (XMR) адрес</label>
+        <textarea id="wallet" rows="3" spellcheck="false" autocomplete="off" placeholder="4A… (95 символов) или 8… (субадрес)"></textarea>
+        <div class="validator" id="validator"><span class="dot"></span><span id="validatorText">Жду адрес</span></div>
+        <div class="hint" id="walletHint">Проверка контрольной суммы Keccak: опечатка = монеты уйдут в никуда.</div>
+        <div class="row-between mini"><label class="check"><input type="checkbox" id="remember" checked> запомнить</label><button class="link-btn" id="forgetWallet">забыть</button></div>
+      </section>
+
+      <section class="card">
+        <div class="step"><span>03</span> Пул — где майнить</div>
+        <div id="poolList" class="pool-list"></div>
+        <label class="field-label mt">Порт / подключение</label>
+        <select id="port"></select>
+        <div class="notes" id="poolNotes"></div>
+      </section>
+
+      <section class="card">
+        <div class="step"><span>04</span> Воркер</div>
+        <div class="two-col">
+          <div><label class="field-label" for="worker">Имя</label><input id="worker" value="rig-01" maxlength="32"></div>
+          <div><label class="field-label" for="threads">CPU, %</label><input id="threads" type="number" min="10" max="100" value="75"></div>
+        </div>
+        <div class="two-col">
+          <div><label class="field-label" for="donate">Donate, %</label><input id="donate" type="number" min="0" max="99" value="1"></div>
+          <div><label class="field-label" for="difficulty">Фикс. сложность</label><input id="difficulty" type="number" min="0" placeholder="авто"></div>
+        </div>
+        <button class="btn btn-ghost full" id="genConfig">⚡ Показать config.json</button>
+      </section>
+
+      <section class="card card-warn">
+        <div class="step">Важно</div>
+        <ul class="warn-list">
+          <li>Майнинг идёт только на этой машине и только после твоей галочки. Никакой скрытой установки в автозагрузку.</li>
+          <li>Антивирусы часто ругаются на XMRig — это ложное срабатывание. Мы качаем только официальный релиз и сверяем SHA256.</li>
+          <li>Не используй депозитный адрес биржи. Нужен свой кошелёк с приватными ключами.</li>
+          <li>При цене электричества в Германии CPU-майнинг почти всегда в минус — см. калькулятор ниже.</li>
+        </ul>
+      </section>
+    </aside>
+
+    <div class="col-right">
+      <section class="card dash">
+        <div class="dash-head">
+          <div><div class="step"><span>05</span> Дашборд</div><span class="pool-label" id="dashPool">—</span></div>
+          <div class="dash-actions"><span class="live" id="liveState">—</span><button class="btn btn-ghost" id="refresh">↻ Обновить</button></div>
+        </div>
+        <div class="metrics">
+          <div class="metric metric-main"><span class="m-label">НАКОПЛЕНО · XMR</span><strong id="mBalance">0.000000</strong><span class="m-sub" id="mBalanceEur">≈ — €</span></div>
+          <div class="metric"><span class="m-label">ХЭШРЕЙТ</span><strong id="mHash">0</strong><span class="m-sub" id="mHashSub">H/s сейчас</span></div>
+          <div class="metric"><span class="m-label">ВЫПЛАЧЕНО</span><strong id="mPaid">0.000000</strong><span class="m-sub">XMR · <span id="mTxCount">0</span> выплат</span></div>
+          <div class="metric"><span class="m-label">ПОСЛЕДНИЙ ШАР</span><strong id="mLast">—</strong><span class="m-sub" id="mShares">шар: —</span></div>
+        </div>
+        <div class="progress-block">
+          <div class="row-between"><span class="field-label">До выплаты</span><span class="mono" id="progressLabel">0.000000 / 0.001 XMR</span></div>
+          <div class="bar"><div class="bar-fill" id="progressBar"></div></div><div class="hint" id="payoutEta">—</div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">💧 Экономика — честно</div>
+        <div class="calc-grid">
+          <div><label class="field-label">Хэшрейт, H/s</label><input id="calcHash" type="number" value="5000"></div>
+          <div><label class="field-label">Потребление, Вт</label><input id="calcWatts" type="number" value="65"></div>
+          <div><label class="field-label">€/кВт·ч</label><input id="calcKwh" type="number" step="0.01" value="0.36"></div>
+        </div>
+        <div class="calc-result" id="calcResult">Считаю…</div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">Сравнение пулов <span class="title-note">проверено 26.10.2026</span></div>
+        <div class="table-scroll"><table class="tbl"><thead><tr><th>Пул</th><th>Комиссия</th><th>Мин. выплата</th><th>Автопорог</th><th>1-я выплата при <span id="cmpHashLbl">5 kH/s</span></th></tr></thead><tbody id="poolCompare"></tbody></table></div>
+        <div class="hint" id="compareNote"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">История выплат</div>
+        <div class="table-scroll"><table class="tbl"><thead><tr><th>Когда</th><th>Сумма</th><th>В €</th><th>TXID</th></tr></thead><tbody id="paymentsBody"><tr><td colspan="4" class="empty">Нет данных</td></tr></tbody></table></div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">config.json <span class="title-note" id="configBadge">введи кошелёк</span></div>
+        <div class="code-wrap"><pre id="configCode">// Нажми «Показать config.json»</pre><button class="copy-btn" id="copyConfig">копировать</button></div>
+        <button class="btn btn-ghost" id="downloadConfig">↓ Скачать config.json</button>
+      </section>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <span>NeonMiner.exe · один файл, без зависимостей · <span id="footerVersion">v—</span></span>
+    <span>Данные читаются из публичных API пулов. Не финансовый совет.</span>
+  </footer>
+</main>
+<div class="toast" id="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

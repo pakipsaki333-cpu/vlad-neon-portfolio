@@ -1,0 +1,44 @@
+{
+  "collective": {
+    "hashRate": 5080.0,
+    "avg1hashRate": 5120.0,
+    "avg3hashRate": 5090.0,
+    "avg6hashRate": 5010.0,
+    "avg24hashRate": 4975.0,
+    "shareRate": 0.18,
+    "lastShare": 1793040567000,
+    "roundHashes": 1039020350180,
+    "totalHashes": 2140000000000,
+    "validShares": 68210,
+    "invalidShares": 54,
+    "staleShares": 11,
+    "foundBlocks": 0,
+    "currentEffort": 0
+  },
+  "solo": {
+    "hashRate": 0,
+    "totalHashes": 0,
+    "validShares": 0
+  },
+  "revenue": {
+    "totalPaid": 5320000000,
+    "dailyPaid": 0,
+    "lastWithdrawal": 1792954212000,
+    "dailyCredited": 310000000,
+    "payoutThreshold": 110000000000,
+    "confirmedBalance": 780000000,
+    "unconfirmedBalance": {
+      "collective": {
+        "total": 120000000,
+        "detail": {}
+      },
+      "solo": {
+        "total": 0,
+        "detail": {}
+      }
+    },
+    "totalPaymentsSent": 7,
+    "totalRewardsCredited": 84210
+  },
+  "banned": null
+}

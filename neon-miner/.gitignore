@@ -1,0 +1,13 @@
+# Рабочая директория CLI (скачанный XMRig, сгенерированный config.json).
+neon-miner-workdir/
+# Локально сгенерированные конфиги с настоящим адресом кошелька.
+config.json
+*.log
+__pycache__/
+*.py[cod]
+.venv/
+
+# Промежуточные файлы сборки Windows-exe (embed.h и Linux-близнец).
+# Готовый dist/NeonMiner.exe — это и есть результат, он в репозитории.
+windows/build/
+*.pdb

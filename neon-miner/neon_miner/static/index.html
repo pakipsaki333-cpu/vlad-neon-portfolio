@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>NeonMiner — капалка XMR</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="glow glow-a"></div><div class="glow glow-b"></div>
+<div class="grid-bg"></div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">◈</span>
+    <span class="brand-text">NEON<span class="brand-dim">//</span>MINER</span>
+    <span class="ver" id="appVersion">v1.0</span>
+  </div>
+  <div class="top-right">
+    <span class="pill pill-safe"><i></i> только своё железо</span>
+    <span class="pill" id="sourcePill">● загрузка…</span>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="hero">
+    <div>
+      <h1>Монетка капает<br><span class="accent">на твой кошелёк.</span></h1>
+      <p class="sub">Вписываешь XMR-адрес → выбираешь пул → получаешь готовый конфиг для XMRig.
+        Дальше майнер работает на <b>твоём</b> компьютере, а панель показывает баланс, хэшрейт и выплаты.</p>
+    </div>
+    <div class="hero-side">
+      <div class="ticker">
+        <span class="ticker-label">XMR / EUR</span>
+        <span class="ticker-value" id="xmrPrice">—</span>
+        <span class="ticker-note" id="priceNote">цена пула</span>
+      </div>
+      <div class="ticker ticker-soft">
+        <span class="ticker-label">сеть</span>
+        <span class="ticker-value small" id="netHash">—</span>
+      </div>
+    </div>
+  </section>
+
+  <div id="demoBanner" class="banner hidden">
+    <span class="banner-tag">ДЕМО</span>
+    <span id="demoText">Цифры вымышлены. Вставь свой XMR-адрес, чтобы увидеть реальную статистику пула.</span>
+    <button class="link-btn" id="demoHide">понятно</button>
+  </div>
+
+  <div class="layout">
+    <!-- ======================= ЛЕВАЯ КОЛОНКА ======================= -->
+    <aside class="col-left">
+      <section class="card" id="walletCard">
+        <div class="step"><span>01</span> Кошелёк</div>
+        <label class="field-label" for="wallet">Твой Monero (XMR) адрес</label>
+        <textarea id="wallet" rows="3" spellcheck="false" autocomplete="off"
+                  placeholder="4A… (95 символов) или 8… (субадрес)"></textarea>
+        <div class="validator" id="validator"><span class="dot"></span><span id="validatorText">Жду адрес</span></div>
+        <div class="hint" id="walletHint">Проверяем контрольную сумму Keccak — опечатка = потеря монет.</div>
+        <div class="row-between mini">
+          <label class="check"><input type="checkbox" id="remember" checked> запомнить в этом браузере</label>
+          <button class="link-btn" id="forgetWallet">забыть</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="step"><span>02</span> Пул — где майнить</div>
+        <div id="poolList" class="pool-list"></div>
+        <div class="field-label mt" for="port">Порт / подключение</div>
+        <select id="port"></select>
+        <div class="notes" id="poolNotes"></div>
+      </section>
+
+      <section class="card">
+        <div class="step"><span>03</span> Настройки воркера</div>
+        <div class="two-col">
+          <div>
+            <label class="field-label" for="worker">Имя воркера</label>
+            <input id="worker" value="rig-01" maxlength="32">
+          </div>
+          <div>
+            <label class="field-label" for="threads">CPU, %</label>
+            <input id="threads" type="number" min="10" max="100" value="75">
+          </div>
+        </div>
+        <div class="two-col">
+          <div>
+            <label class="field-label" for="donate">Donate, %</label>
+            <input id="donate" type="number" min="0" max="99" value="1">
+          </div>
+          <div>
+            <label class="field-label" for="difficulty">Фикс. сложность</label>
+            <input id="difficulty" type="number" min="0" placeholder="авто">
+          </div>
+        </div>
+        <button class="btn btn-primary full" id="genConfig">⚡ Собрать конфиг XMRig</button>
+        <div class="hint center">Конфиг создаётся локально, никуда не отправляется.</div>
+      </section>
+
+      <section class="card card-warn">
+        <div class="step">Прежде чем майнить</div>
+        <ul class="warn-list">
+          <li>Только своё железо. Скрытый майнинг на чужих устройствах и посетителях сайта — криптоджекинг, мы такое не делаем.</li>
+          <li>Не майни на бесплатных VPS/PaaS (Render, Oracle Free): это нарушает ToS и приводит к бану.</li>
+          <li>Не используй адрес биржи — нужен свой кошелёк с приватными ключами.</li>
+          <li>Антивирусы ругаются на XMRig: качай только официальный релиз и проверяй SHA256.</li>
+        </ul>
+      </section>
+    </aside>
+
+    <!-- ======================= ПРАВАЯ КОЛОНКА ======================= -->
+    <div class="col-right">
+      <section class="card dash">
+        <div class="dash-head">
+          <div>
+            <div class="step"><span>04</span> Дашборд</div>
+            <span class="pool-label" id="dashPool">—</span>
+          </div>
+          <div class="dash-actions">
+            <span class="live" id="liveState">—</span>
+            <button class="btn btn-ghost" id="refresh">↻ Обновить</button>
+          </div>
+        </div>
+
+        <div class="metrics">
+          <div class="metric metric-main">
+            <span class="m-label">НАКОПЛЕНО · XMR</span>
+            <strong id="mBalance">0.000000</strong>
+            <span class="m-sub" id="mBalanceEur">≈ — €</span>
+          </div>
+          <div class="metric">
+            <span class="m-label">ХЭШРЕЙТ</span>
+            <strong id="mHash">0</strong>
+            <span class="m-sub" id="mHashSub">H/s сейчас</span>
+          </div>
+          <div class="metric">
+            <span class="m-label">ВЫПЛАЧЕНО ВСЕГО</span>
+            <strong id="mPaid">0.000000</strong>
+            <span class="m-sub">XMR · <span id="mTxCount">0</span> транзакций</span>
+          </div>
+          <div class="metric">
+            <span class="m-label">ПОСЛЕДНИЙ ШАР</span>
+            <strong id="mLast">—</strong>
+            <span class="m-sub" id="mShares">шар: —</span>
+          </div>
+        </div>
+
+        <div class="progress-block">
+          <div class="row-between">
+            <span class="field-label">До следующей выплаты</span>
+            <span class="mono" id="progressLabel">0.000000 / 0.001 XMR</span>
+          </div>
+          <div class="bar"><div class="bar-fill" id="progressBar"></div></div>
+          <div class="hint" id="payoutEta">—</div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">💧 Экономика — без розовых очков</div>
+        <div class="calc-grid">
+          <div><label class="field-label">Хэшрейт, H/s</label><input id="calcHash" type="number" value="5000"></div>
+          <div><label class="field-label">Потребление, Вт</label><input id="calcWatts" type="number" value="65"></div>
+          <div><label class="field-label">€/кВт·ч</label><input id="calcKwh" type="number" step="0.01" value="0.36"></div>
+        </div>
+        <div class="calc-result" id="calcResult">Считаю…</div>
+        <div class="hint">Средняя розничная цена электричества в Германии ≈ 0.30–0.40 €/кВт·ч. Подставь свою из счёта.</div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">Сравнение пулов <span class="title-note">проверено 26.10.2026</span></div>
+        <div class="table-scroll">
+          <table class="tbl">
+            <thead><tr><th>Пул</th><th>Комиссия</th><th>Мин. выплата</th><th>Порог по умолч.</th><th>1-я выплата при <span id="cmpHashLbl">5 kH/s</span></th></tr></thead>
+            <tbody id="poolCompare"></tbody>
+          </table>
+        </div>
+        <div class="hint" id="compareNote"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">История выплат</div>
+        <div class="table-scroll">
+          <table class="tbl">
+            <thead><tr><th>Когда</th><th>Сумма</th><th>В € на момент</th><th>TXID</th></tr></thead>
+            <tbody id="paymentsBody"><tr><td colspan="4" class="empty">Нет данных</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card" id="configCard">
+        <div class="card-title">Готовый конфиг <span class="title-note" id="configBadge">введи кошелёк</span></div>
+        <div class="tabs" id="configTabs">
+          <button data-tab="config" class="active">config.json</button>
+          <button data-tab="cmd_linux">Linux/macOS</button>
+          <button data-tab="cmd_windows">Windows</button>
+          <button data-tab="systemd_unit">systemd</button>
+          <button data-tab="windows_bat">start.bat</button>
+        </div>
+        <div class="code-wrap">
+          <pre id="configCode">// Нажми «Собрать конфиг XMRig» — тут появится готовый файл.</pre>
+          <button class="copy-btn" id="copyConfig">копировать</button>
+        </div>
+        <button class="btn btn-ghost" id="downloadConfig">↓ Скачать config.json</button>
+      </section>
+
+      <section class="card">
+        <div class="card-title">Запуск в один шаг <span class="title-note" id="releaseInfo">официальный XMRig</span></div>
+        <p class="hint">Клиент скачает XMRig с github.com/xmrig/xmrig, сверит SHA256 с SHA256SUMS релиза
+          и только потом запустит. Без проверки — ни одного запуска.</p>
+        <div class="code-wrap"><pre id="startCmd">python3 -m neon_miner start --wallet ТВОЙ_АДРЕС --pool c3pool --download --yes</pre>
+          <button class="copy-btn" id="copyStart">копировать</button></div>
+        <div class="row-between mini">
+          <a class="link-btn" href="https://github.com/xmrig/xmrig/releases/latest" target="_blank" rel="noopener noreferrer">↗ официальные релизы XMRig</a>
+          <span class="hint" id="releaseVersion">—</span>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <span>NeonMiner · локальный клиент, только stdlib Python · данные читаются из публичных API пулов</span>
+    <span>Не финансовый совет. Налоги на майнинг уточняй отдельно.</span>
+  </footer>
+</main>
+
+<div class="toast" id="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

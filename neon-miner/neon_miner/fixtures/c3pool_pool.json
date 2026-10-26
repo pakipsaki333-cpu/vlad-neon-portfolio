@@ -1,0 +1,21 @@
+{
+  "pool_list": [
+    "pplns"
+  ],
+  "pool_statistics": {
+    "hashRate": 492490306.0,
+    "miners": 2229,
+    "totalHashes": 1.9e+22,
+    "lastBlockFoundTime": 1793040192,
+    "lastBlockFound": 3792737,
+    "totalBlocksFound": 66267,
+    "totalMinersPaid": 30547,
+    "totalPayments": 353059,
+    "roundHashes": 60847783560.0
+  },
+  "last_payment": 1793038812,
+  "price": {
+    "usd": 593.76,
+    "eur": 530.75
+  }
+}

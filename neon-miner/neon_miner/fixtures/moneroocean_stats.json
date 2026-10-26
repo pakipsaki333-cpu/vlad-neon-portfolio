@@ -1,0 +1,13 @@
+{
+  "hash": 5110.0,
+  "identifier": "global",
+  "lastHash": 1793040552,
+  "totalHashes": 1842000000000,
+  "validShares": 64521,
+  "invalidShares": 98,
+  "amtPaid": 3210000000,
+  "amtDue": 1420000000,
+  "txnCount": 4,
+  "hash2": 0,
+  "lastShareAlgo": false
+}

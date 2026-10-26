@@ -1,0 +1,35 @@
+{
+  "pool_statistics": {
+    "collective": {
+      "miners": 3863,
+      "hashRate": 688544848.0,
+      "totalBlocksFound": 168947,
+      "validShares": 127358746365
+    }
+  },
+  "network_statistics": {
+    "height": 3792740,
+    "difficulty": 826300623048,
+    "value": 607969680000,
+    "ts": 1793040612000
+  },
+  "block_template": {
+    "height": 3792741,
+    "difficulty": 825424963937
+  },
+  "config": {
+    "pplns_fee": 0.9,
+    "min_wallet_payout": 1000000000,
+    "maturity_depth": 30
+  },
+  "market": {
+    "rank": 13,
+    "price_btc": 0.00740828,
+    "price_usd": 593.9,
+    "price_eur": 530.85,
+    "price_rub": 47988,
+    "percent_change_24h": -1.18121,
+    "last_updated": "2026-10-26T18:34:55.000Z"
+  },
+  "online": 500
+}
