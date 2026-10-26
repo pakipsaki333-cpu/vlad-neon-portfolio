@@ -1,0 +1,137 @@
+name: doss · тестовый ключ (временный, на раннере)
+
+# Поднимает РАБОЧИЙ узел Doss на раннере GitHub и публикует его через
+# Cloudflare quick tunnel (без аккаунта, без карты). Ссылка vless:// печатается
+# в логе и в Summary запуска.
+#
+# Это ТЕСТОВЫЙ стенд: живёт только пока идёт job (до `minutes` минут),
+# после чего ссылка умирает. Постоянный сервис — Render/VPS, см. DEPLOY.md.
+#
+# Запуск: Actions → «doss · тестовый ключ» → Run workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Сколько минут держать ключ живым (1–55)"
+        required: false
+        default: "45"
+      uuid:
+        description: "UUID (пусто — сгенерировать новый)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  testkey:
+    name: поднять узел и выдать ссылку
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Подготовка (Xray + cloudflared)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq curl jq unzip
+          curl -fsSL -o /tmp/xray.zip \
+            "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
+          unzip -oq /tmp/xray.zip -d /tmp/xray
+          sudo install -m 0755 /tmp/xray/xray /usr/local/bin/xray
+          sudo mkdir -p /usr/local/share/xray
+          sudo install -m 0644 /tmp/xray/geoip.dat /usr/local/share/xray/ || true
+          sudo install -m 0644 /tmp/xray/geosite.dat /usr/local/share/xray/ || true
+          xray version | head -1
+          curl -fsSL -o /tmp/cloudflared \
+            "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+          sudo install -m 0755 /tmp/cloudflared /usr/local/bin/cloudflared
+          cloudflared --version
+
+      - name: Запустить Xray (VLESS + WebSocket на 8080)
+        env:
+          DOSS_UUID_IN: ${{ github.event.inputs.uuid }}
+        run: |
+          set -euo pipefail
+          UUID="${DOSS_UUID_IN:-$(python3 -c 'import uuid;print(uuid.uuid4())')}"
+          echo "DOSS_UUID=$UUID" >> "$GITHUB_ENV"
+          DOSS_DRY_RUN=1 DOSS_UUID="$UUID" PORT=8080 \
+            RENDER_EXTERNAL_HOSTNAME=pending.trycloudflare.com \
+            bash doss/deploy/paas/entrypoint.sh > /tmp/link-preview.txt 2>&1 || true
+          nohup env DOSS_UUID="$UUID" PORT=8080 DOSS_LOGLEVEL=warning \
+            bash doss/deploy/paas/entrypoint.sh > /tmp/xray.log 2>&1 &
+          for i in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/8080) 2>/dev/null; then echo "xray слушает 8080"; break; fi
+            sleep 1
+          done
+          ss -ltn | grep 8080 || { cat /tmp/xray.log; exit 1; }
+
+      - name: Поднять туннель Cloudflare (без аккаунта)
+        run: |
+          set -euo pipefail
+          nohup cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8080 \
+            > /tmp/cloudflared.log 2>&1 &
+          HOST=""
+          for i in $(seq 1 60); do
+            HOST="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/cloudflared.log | head -1 || true)"
+            [ -n "$HOST" ] && break
+            sleep 2
+          done
+          if [ -z "$HOST" ]; then
+            echo "::error::не удалось получить адрес туннеля"
+            tail -40 /tmp/cloudflared.log
+            exit 1
+          fi
+          echo "TUNNEL_HOST=${HOST#https://}" >> "$GITHUB_ENV"
+          echo "туннель: $HOST"
+          sleep 5
+          curl -s -o /dev/null -w "проверка через туннель: HTTP %{http_code}\n" "$HOST" || true
+
+      - name: Выдать ссылку для клиента
+        run: |
+          set -euo pipefail
+          HOST="$TUNNEL_HOST"
+          UUID="$DOSS_UUID"
+          LINK="vless://${UUID}@${HOST}:443?encryption=none&security=tls&type=ws&host=${HOST}&path=%2Fdoss-ws&sni=${HOST}&fp=chrome#Doss%20test"
+          {
+            echo "## 🛡 Doss — тестовый ключ готов"
+            echo ""
+            echo "**Живёт примерно ${{ github.event.inputs.minutes }} мин** (потом ссылка умрёт)."
+            echo ""
+            echo '```'
+            echo "$LINK"
+            echo '```'
+            echo ""
+            echo "Hiddify → «+» → «Импорт из буфера обмена» → Подключиться."
+            echo ""
+            echo "Проверка: после подключения открой https://ifconfig.me — IP должен быть Cloudflare/не твой."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "LINK=$LINK" >> "$GITHUB_ENV"
+          echo "=================================================="
+          echo " ССЫЛКА ДЛЯ КЛИЕНТА:"
+          echo ""
+          echo "$LINK"
+          echo ""
+          echo "=================================================="
+
+      - name: Держать узел живым
+        run: |
+          set -euo pipefail
+          MIN="${{ github.event.inputs.minutes }}"
+          MIN="${MIN:-45}"
+          echo "держу ключ $MIN мин (job умрёт сам максимум через 65)"
+          END=$(( $(date +%s) + MIN * 60 ))
+          while [ "$(date +%s)" -lt "$END" ]; do
+            # пинг: туннель не должен простаивать, и мы видим, жив ли он
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "https://${TUNNEL_HOST}" || true)"
+            echo "$(date +%H:%M:%S) туннель HTTP ${code}"
+            sleep 60
+          done
+
+      - name: Итоговый лог (если что-то упало)
+        if: always()
+        run: |
+          echo "--- xray ---"; tail -20 /tmp/xray.log || true
+          echo "--- cloudflared ---"; tail -20 /tmp/cloudflared.log || true
