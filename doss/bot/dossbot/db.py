@@ -18,6 +18,11 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at  TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+
 CREATE TABLE IF NOT EXISTS payments (
     id          TEXT PRIMARY KEY,              -- telegram_payment_charge_id
     tg_id       INTEGER NOT NULL,
@@ -106,6 +111,19 @@ class Database:
             return True
         except sqlite3.IntegrityError:
             return False
+
+    # --- служебные значения (например, кто владелец бота) --------------
+    def get_meta(self, key: str, default: str | None = None) -> str | None:
+        row = self.conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else default
+
+    def set_meta(self, key: str, value: str) -> None:
+        self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()

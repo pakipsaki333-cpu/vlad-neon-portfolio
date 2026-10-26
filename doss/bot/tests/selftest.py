@@ -16,7 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from dossbot.config import Config  # noqa: E402
 from dossbot.db import Database  # noqa: E402
 from dossbot.providers import DemoProvider, ProviderError  # noqa: E402
-from dossbot.service import NotAllowed, SubscriptionService  # noqa: E402
+from dossbot.service import (NotAllowed, SubscriptionService,  # noqa: E402
+                             claim_owner, resolve_owner)
 
 PASS = FAIL = 0
 
@@ -97,6 +98,17 @@ async def main() -> int:
     svc_broken = SubscriptionService(db, Broken(), cfg)
     check("ошибка провайдера -> понятный NotAllowed",
           await _raises(svc_broken.start_trial, 999))
+
+    print("== владелец без OWNER_ID (первый /start)")
+    cfg0 = Config(db_path=cfg.db_path, provider="demo", owner_id=0)
+    check("до первого /start владельца нет", resolve_owner(cfg0, db) == 0)
+    check("первый /start назначает владельца", claim_owner(cfg0, db, 777) is True)
+    check("владелец запомнен", resolve_owner(cfg0, db) == 777)
+    check("второй /start владельца не перебивает", claim_owner(cfg0, db, 888) is False)
+    check("после перезапуска владелец тот же", resolve_owner(cfg0, db) == 777)
+    cfg_forced = Config(db_path=cfg.db_path, provider="demo", owner_id=12345)
+    check("OWNER_ID в env важнее", resolve_owner(cfg_forced, db) == 12345)
+    check("claim с готовым владельцем ничего не меняет", claim_owner(cfg_forced, db, 999) is False)
 
     print("== статистика")
     s = db.stats()

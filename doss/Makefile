@@ -7,7 +7,7 @@ PYTEST_DEPS = fastapi uvicorn qrcode[pil] python-multipart httpx aiogram aiosqli
 help:
 	@echo "make test         — все тесты (server + bot + panel)"
 	@echo "make test-server  — CLI doss (33 проверки)"
-	@echo "make test-bot     — логика бота (26) + интеграция с CLI (10)"
+	@echo "make test-bot     — логика бота (33) + интеграция с CLI (10)"
 	@echo "make test-panel   — панель/подписки/админка (23)"
 	@echo "make panel        — демо-панель на http://0.0.0.0:8000"
 	@echo "make bot          — запуск бота (нужен BOT_TOKEN в doss/bot/.env)"

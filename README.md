@@ -18,7 +18,7 @@ run.bat
 
 Собственная VPN-инфраструктура: бесплатный узел на Oracle Cloud Always Free,
 VLESS + REALITY (+ XHTTP / AmneziaWG), CLI для доступа, Telegram-бот с подпиской
-за Stars и веб-панель (лендинг + админка). 92 автотеста, `make test`.
+за Stars и веб-панель (лендинг + админка). 99 автотестов, `make test`.
 
 ➡ **План, установка и ограничения: [`doss/README.md`](doss/README.md)**
 ➡ Где брать бесплатные сервера в 2026: [`doss/docs/free-servers.md`](doss/docs/free-servers.md)

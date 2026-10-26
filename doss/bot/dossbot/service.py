@@ -25,6 +25,24 @@ class Access:
     status: str
 
 
+def resolve_owner(cfg, db) -> int:
+    """OWNER_ID из env, иначе — сохранённый в БД (первый /start)."""
+    if getattr(cfg, "owner_id", 0):
+        return int(cfg.owner_id)
+    try:
+        return int(db.get_meta("owner_id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def claim_owner(cfg, db, user_id: int) -> bool:
+    """Первый /start становится владельцем. True — если назначили только что."""
+    if resolve_owner(cfg, db):
+        return False
+    db.set_meta("owner_id", str(user_id))
+    return True
+
+
 def today() -> date:
     return datetime.utcnow().date()
 

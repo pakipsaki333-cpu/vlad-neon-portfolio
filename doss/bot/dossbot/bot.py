@@ -18,7 +18,8 @@ from aiogram.types import (CallbackQuery, InlineKeyboardButton,
 from .config import Config
 from .db import Database
 from .providers import ProviderError, build_provider
-from .service import NotAllowed, SubscriptionService
+from .service import (NotAllowed, SubscriptionService, claim_owner,
+                      resolve_owner)
 
 log = logging.getLogger("doss.bot")
 router = Router()
@@ -70,7 +71,9 @@ def access_text(acc) -> str:
 
 # ------------------------------------------------------------------ команды
 @router.message(CommandStart())
-async def cmd_start(message: Message, cfg: Config, svc: SubscriptionService) -> None:
+async def cmd_start(message: Message, cfg: Config, db: Database,
+                    svc: SubscriptionService) -> None:
+    became_owner = claim_owner(cfg, db, message.from_user.id)
     name = html.escape(message.from_user.first_name or "друг")
     text = (
         f"Привет, {name}! Это <b>Doss</b> — личный VPN без рекламы и логов.\n\n"
@@ -82,6 +85,22 @@ async def cmd_start(message: Message, cfg: Config, svc: SubscriptionService) -> 
         "Выбирай:"
     )
     await message.answer(text, reply_markup=main_kb())
+
+    if became_owner:
+        await message.answer(
+            "👑 Ты назначен <b>владельцем</b> этого бота (первый, кто его запустил).\n\n"
+            "Тебе доступны:\n"
+            "• /grant &lt;tg_id&gt; &lt;дней|inf&gt; — выдать доступ другу или себе\n"
+            "• /stats — пользователи и платежи\n"
+            "• /whoami — твой tg_id (для /grant)\n\n"
+            "Личный безлимит себе: <code>/grant "
+            f"{message.from_user.id} inf</code>",
+        )
+
+
+@router.message(Command("whoami"))
+async def cmd_whoami(message: Message) -> None:
+    await message.answer(f"Твой tg_id: <code>{message.from_user.id}</code>")
 
 
 @router.message(Command("help"))
@@ -110,9 +129,10 @@ async def cmd_buy(message: Message, cfg: Config) -> None:
 
 
 @router.message(Command("support"))
-async def cmd_support(message: Message, cfg: Config) -> None:
-    owner = f"@{cfg.owner_id}" if not cfg.owner_id else f"tg://user?id={cfg.owner_id}"
-    await message.answer(f"Напиши владельцу: {owner}\nОпиши сеть (оператор) и клиент — так быстрее.")
+async def cmd_support(message: Message, cfg: Config, db: Database) -> None:
+    owner = resolve_owner(cfg, db)
+    where = f"tg://user?id={owner}" if owner else "владельцу бота"
+    await message.answer(f"Напиши {where}\nОпиши сеть (оператор) и клиент — так быстрее.")
 
 
 # --------------------------------------------------------------- callbacks
@@ -198,13 +218,14 @@ async def on_paid(message: Message, cfg: Config, svc: SubscriptionService) -> No
 
 
 # ------------------------------------------------------------------ админ
-def _is_owner(cfg: Config, user_id: int) -> bool:
-    return cfg.owner_id != 0 and user_id == cfg.owner_id
+def _is_owner(cfg: Config, db: Database, user_id: int) -> bool:
+    owner = resolve_owner(cfg, db)
+    return owner != 0 and user_id == owner
 
 
 @router.message(Command("stats"))
 async def cmd_stats(message: Message, cfg: Config, db: Database) -> None:
-    if not _is_owner(cfg, message.from_user.id):
+    if not _is_owner(cfg, db, message.from_user.id):
         return
     s = db.stats()
     by = ", ".join(f"{k}: {v}" for k, v in sorted(s["by_status"].items())) or "—"
@@ -215,9 +236,10 @@ async def cmd_stats(message: Message, cfg: Config, db: Database) -> None:
 
 
 @router.message(Command("grant"))
-async def cmd_grant(message: Message, cfg: Config, svc: SubscriptionService) -> None:
+async def cmd_grant(message: Message, cfg: Config, db: Database,
+                    svc: SubscriptionService) -> None:
     """ /grant <tg_id> <дней|inf> """
-    if not _is_owner(cfg, message.from_user.id):
+    if not _is_owner(cfg, db, message.from_user.id):
         return
     parts = (message.text or "").split()
     if len(parts) < 3:

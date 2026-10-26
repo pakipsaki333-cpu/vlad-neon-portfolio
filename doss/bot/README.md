@@ -16,7 +16,16 @@ bot/
     └── test_provider_cli.py  10 проверок интеграции с реальным CLI doss
 ```
 
-## Запуск
+## Установка на сервере
+
+```bash
+sudo ./deploy/install-all.sh     # ставит всё, включая бота
+sudo doss-set-token              # единственный шаг: вставить токен
+```
+
+Дальше бот обновляется только через `/start` → `/whoami` → `/grant <id> inf`.
+
+## Запуск вручную (для разработки)
 
 ```bash
 cd doss/bot
@@ -26,7 +35,9 @@ python3 -m venv .venv
 ./.venv/bin/python -m dossbot
 ```
 
-`BOT_TOKEN` — у [@BotFather](https://t.me/BotFather), `OWNER_ID` — у @userinfobot.
+`BOT_TOKEN` — у [@BotFather](https://t.me/BotFather). `OWNER_ID` можно не заполнять:
+**владельцем становится тот, кто первым отправил `/start`** (сохраняется в БД).
+На сервере это делает за тебя `sudo doss-set-token`, затем `/whoami` покажет твой id.
 
 ## Что умеет
 
@@ -38,6 +49,7 @@ python3 -m venv .venv
 | `/me` | срок, лимит, `vless://`-ссылка |
 | `/help` | как подключить Hiddify / v2rayNG |
 | `/support` | связь с владельцем |
+| `/whoami` | твой tg_id (пригодится для `/grant`) |
 | `/stats` | (владелец) пользователи, платежи, суммы |
 | `/grant <tg_id> <дней\|inf>` | (владелец) выдать доступ вручную |
 
