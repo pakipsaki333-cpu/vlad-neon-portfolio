@@ -66,6 +66,24 @@ jobs:
           Get-Content selftest_exe/report.json
           "Размер exe: {0:N1} МБ" -f ((Get-Item dist/SeaBattleHelper.exe).Length / 1MB)
           exit $p.ExitCode
+      - name: Итоги самопроверки (аннотации)
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($d in "selftest_src", "selftest_exe") {
+            $f = Join-Path $d "report.json"
+            if (Test-Path $f) {
+              $r = Get-Content $f -Raw -Encoding utf8 | ConvertFrom-Json
+              $scr = ($r.screens | ForEach-Object { "$($_.geometry -join 'x')@$($_.dpr)" }) -join ", "
+              Write-Output "::notice title=Самопроверка $d::ok=$($r.ok) mode=$($r.mode) won=$($r.won) shots=$($r.shots) max_lag=$($r.max_lag_s)s time=$($r.elapsed_s)s grids=$($r.grids_on_screen) screens=$scr errors=$($r.errors.Count)"
+            } else {
+              Write-Output "::warning title=Самопроверка $d::report.json не найден"
+            }
+          }
+          if (Test-Path dist/SeaBattleHelper.exe) {
+            $mb = "{0:N1}" -f ((Get-Item dist/SeaBattleHelper.exe).Length / 1MB)
+            Write-Output "::notice title=SeaBattleHelper.exe::размер $mb МБ"
+          }
       - name: exe
         uses: actions/upload-artifact@v4
         with:
