@@ -1,4 +1,4 @@
 # NeonMiner.exe — собран v6.26.0 из windows/neonminer.c
 # Проверка в PowerShell: (Get-FileHash .\NeonMiner.exe -Algorithm SHA256).Hash
 d035e6d39094c3f1ec468f0c4639e6896ed20bcdbd5c0260fa0295d7af0494ff  NeonMiner.exe
-0539bbf11ace0c2f553760d09fd3c26c065ba510bd6cbc5bb38bbcfe1a868d30  NeonMiner-wallet.html
+919bf4ce677e1887b7c5026d2321834b472074d8facddda171eabb4fa1bf4d13  NeonMiner-wallet.html
