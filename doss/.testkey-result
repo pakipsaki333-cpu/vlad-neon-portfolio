@@ -1,0 +1,12 @@
+# Тестовый ключ Doss (временный)
+
+Создан: 2026-10-26T18:14:44Z
+Умирает: 2026-10-26T18:59:44Z (UTC)
+Job: https://github.com/pakipsaki333-cpu/vlad-neon-portfolio/actions/runs/40375920730
+
+```
+vless://ca0d416a-5a38-4dd8-8eb1-9ec6c24567dd@guided-isolated-seo-rely.trycloudflare.com:443?encryption=none&security=tls&type=ws&host=guided-isolated-seo-rely.trycloudflare.com&path=%2Fdoss-ws&sni=guided-isolated-seo-rely.trycloudflare.com&fp=chrome#Doss%20test
+```
+
+Это тестовый стенд на раннере GitHub: после истечения ссылка мертва.
+Постоянный сервис — см. DEPLOY.md.
