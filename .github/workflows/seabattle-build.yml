@@ -33,9 +33,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Зависимости
-        run: python -m pip install numpy pytest pillow
+        run: python -m pip install numpy pytest pillow pytest-github-actions-annotate-failures
       - name: Тесты (решатель, распознавание, расстановка)
-        run: python -m pytest -q
+        run: python -m pytest -q -rfE
 
   windows:
     name: exe для Windows + самопроверка
@@ -51,9 +51,12 @@ jobs:
         with:
           python-version: "3.12"
       - name: Зависимости
-        run: python -m pip install -r requirements-dev.txt pyinstaller
+        run: |
+          python -m pip install -r requirements-dev.txt pyinstaller pytest-github-actions-annotate-failures
+          python -c "import sys, PySide6, numpy; print(f'::notice title=Версии::Python {sys.version.split()[0]}, PySide6 {PySide6.__version__}, numpy {numpy.__version__}')"
       - name: Тесты на Windows
-        run: python -m pytest -q
+        timeout-minutes: 10
+        run: python -m pytest -q -rfE
       - name: Самопроверка из исходников (захват экрана, распознавание, подсказки)
         timeout-minutes: 6
         run: python -m seabattle --selftest selftest_src
