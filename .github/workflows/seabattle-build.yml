@@ -53,7 +53,7 @@ jobs:
       - name: Зависимости
         run: |
           python -m pip install -r requirements-dev.txt pyinstaller pytest-github-actions-annotate-failures
-          python -c "import sys, PySide6, numpy; print(f'::notice title=Версии::Python {sys.version.split()[0]}, PySide6 {PySide6.__version__}, numpy {numpy.__version__}')"
+          python -c "import sys, PySide6, numpy; print(f'::notice title=Versions::Python {sys.version.split()[0]}, PySide6 {PySide6.__version__}, numpy {numpy.__version__}')"
       - name: Тесты на Windows
         timeout-minutes: 10
         run: python -m pytest -q -rfE
