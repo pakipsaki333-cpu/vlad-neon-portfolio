@@ -144,7 +144,7 @@
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest                      # 102 теста: решатель, распознавание (и на настоящем
+python -m pytest                      # 103 теста: решатель, распознавание (и на настоящем
                                       # скриншоте), расстановка, автоигра
 python -m seabattle --selftest out    # самопроверка: тренировка + захват экрана + отчёт
 python -m seabattle --selftest out --auto   # то же, но играет автоигра настоящими щелчками мыши
