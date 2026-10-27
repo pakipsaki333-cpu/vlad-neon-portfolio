@@ -220,7 +220,9 @@ def test_autoplay_clicks_the_right_cells_and_waits_out_opponent_turn(tmp_path, m
         assert _wait(app, lambda: np.array_equal(np.where(practice.ref.states == SUNK, HIT, practice.ref.states),
                                                  np.where(win.tracker.states == SUNK, HIT, win.tracker.states)), 5)
         # пропавшие во время хода соперника щелчки повторены: щелчков больше, чем принятых выстрелов
-        assert ap.clicks == practice.ref.shots + practice.ignored_clicks
+        # (повтор в уже открытую клетку возможен, если отметка распозналась позже, чем ждали)
+        assert ap.clicks == practice.ref.shots + practice.ignored_clicks + practice.repeat_clicks
+        assert practice.repeat_clicks <= 2
     finally:
         win.stop_auto()
         win.timer.stop()

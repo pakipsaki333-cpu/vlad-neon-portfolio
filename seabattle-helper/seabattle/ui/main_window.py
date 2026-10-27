@@ -24,7 +24,7 @@ from ..rules import (HIT, LETTERS_TOP, MISS, NUMBERS_TOP, PRESETS, SHIP_NAMES, S
 from ..settings import Settings
 from ..solver import analyze
 from ..vision import (BoardTracker, GridGeom, border_signature, detect_label_layout, extract_patches,
-                      find_grids, refine_grid, signature_match)
+                      find_grids, signature_match)
 from ..icon import glyph_icon
 from . import theme
 from .grid_widget import BoardView
@@ -1196,25 +1196,25 @@ class MainWindow(QWidget):
 
     def _recheck_geometry(self, img):
         """После перезапуска поле берётся из настроек — сверяем его с экраном: версия 1.0 на
-        «тетрадных» сайтах (Яндекс Игры) могла запомнить поле со сдвигом на клетку."""
+        «тетрадных» сайтах (Яндекс Игры) могла запомнить поле со сдвигом на клетку.
+        Берём поле, найденное на экране заново, если оно того же размера и совсем рядом."""
+        try:
+            grids = find_grids(capture.qimage_to_rgb(img), n=self.rules.size)
+        except Exception:
+            return False
         fixed = False
         for attr in ("enemy_geom", "my_geom"):
             g = getattr(self, attr)
             if g is None:
                 continue
-            m = int(2.5 * max(g.cw, g.ch))
-            rect = QRect(int(g.x0) - m, int(g.y0) - m, int(g.width) + 2 * m, int(g.height) + 2 * m)
-            rect = rect.intersected(img.rect())
-            if rect.width() < g.width or rect.height() < g.height:
+            near = [h for h in grids
+                    if abs(h.cw - g.cw) < 0.1 * g.cw and abs(h.ch - g.ch) < 0.1 * g.ch
+                    and abs(h.x0 - g.x0) <= 2.5 * g.cw and abs(h.y0 - g.y0) <= 2.5 * g.ch]
+            if not near:
                 continue
-            try:
-                g2, conf = refine_grid(capture.qimage_to_rgb(img, rect), g.shifted(-rect.x(), -rect.y()))
-            except Exception:
-                continue
-            g2 = g2.shifted(rect.x(), rect.y())
-            moved = abs(g2.x0 - g.x0) > 0.3 * g.cw or abs(g2.y0 - g.y0) > 0.3 * g.ch
-            if conf > 0.3 and moved and abs(g2.cw - g.cw) < 0.1 * g.cw and abs(g2.ch - g.ch) < 0.1 * g.ch:
-                setattr(self, attr, g2)
+            h = min(near, key=lambda h: abs(h.x0 - g.x0) + abs(h.y0 - g.y0))
+            if abs(h.x0 - g.x0) > 0.3 * g.cw or abs(h.y0 - g.y0) > 0.3 * g.ch:
+                setattr(self, attr, h)
                 fixed = True
         if fixed:
             self.s.enemy_geom = self.enemy_geom.to_dict()

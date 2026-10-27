@@ -124,6 +124,7 @@ class PracticeWindow(QWidget):
         self.busy = False
         self.board.dimmed = False
         self.ignored_clicks = 0
+        self.repeat_clicks = 0               # щелчки в уже открытую клетку (сайт их тоже не считает)
         self.ref = Referee(random_layout(self.rules, self.rng), self.rules,
                            auto_mark=self.auto_mark.isChecked())
         self.board.states = self.ref.states
@@ -135,6 +136,7 @@ class PracticeWindow(QWidget):
             self.ignored_clicks += 1
             return
         if self.ref.done or self.ref.states[r, c] != UNKNOWN:
+            self.repeat_clicks += 1
             return
         self.ref.auto_mark = self.auto_mark.isChecked()
         res = self.ref.shoot(r, c)
