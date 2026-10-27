@@ -5,6 +5,12 @@
   * при классике по диагонали от любого попадания кораблей нет;
   * группа попаданий, которую некуда продлить, — это убитый корабль;
   * группа длиной с самый большой оставшийся корабль — тоже убита.
+
+Последний вывод верен, только если состав флота в настройках совпадает с сайтом. Поэтому
+противоречия с флотом (в ряд попаданий больше, чем палуб у самого длинного корабля, попаданий
+больше, чем палуб во всём флоте) отмечаются отдельно — fleet_issue, а группы, «убитые» только
+по длине, запоминаются в by_length: сайт, который сам обводит потопленные корабли точками,
+это подтвердит или опровергнет (см. fleetcheck.py).
 """
 from __future__ import annotations
 
@@ -131,8 +137,10 @@ class Prepared:
     unknown: np.ndarray                # bool: не стреляли и не исключено
     hit_groups: list = field(default_factory=list)
     inferred: list = field(default_factory=list)   # группы, признанные убитыми логически
+    by_length: list = field(default_factory=list)  # … из них «убитые» только потому, что длиннее кораблей нет
     issues: list = field(default_factory=list)
     fatal: bool = False                # противоречие, при котором решать нельзя
+    fleet_issue: str = ""              # поле противоречит составу флота (а не только отметкам)
 
 
 def _forbidden(n, st, sunk_ships, hit_groups, touch):
@@ -173,7 +181,10 @@ def prepare(states, rules: Rules, *, sunk_marked=None, touch=None, trust_sunk=Tr
     if not trust_sunk:
         st[st == SUNK] = HIT
     fleet = Counter(rules.fleet)
+    max_len = max(rules.fleet)
     inferred = []
+    by_length = []
+    fleet_issue = ""
 
     if touch != TOUCH_ANY:
         # Клетки «ранил» рядом с «убил» — это один и тот же убитый корабль.
@@ -206,6 +217,8 @@ def prepare(states, rules: Rules, *, sunk_marked=None, touch=None, trust_sunk=Tr
                     for r, c in comp:
                         st[r, c] = SUNK
                     inferred.append(comp)
+                    if can_extend:
+                        by_length.append(comp)
                     changed = True
                     break  # пересчитать остаток флота и ореолы
             if not changed:
@@ -215,6 +228,25 @@ def prepare(states, rules: Rules, *, sunk_marked=None, touch=None, trust_sunk=Tr
                 issues.append("Корабль не прямой — проверь отметки на поле или правило касания.")
                 fatal = True
                 break
+        longest = max((len(cp) for cp in sunk_ships + hit_groups if comp_shape(cp) != "bad"), default=0)
+        if longest > max_len:
+            # корабли не касаются бортами → прямой ряд попаданий — это один корабль
+            fleet_issue = (f"{longest} попаданий в ряд, а самый длинный корабль во флоте — "
+                           f"{max_len}-палубный")
+            issues.append(f"{fleet_issue[0].upper()}{fleet_issue[1:]}. Похоже, на сайте другой состав "
+                          "флота — проверь «Настройки».")
+            fatal = True
+        else:
+            rem_max = max((L for L, k in remaining_c.items() if k > 0), default=0)
+            for cp in hit_groups:
+                if comp_shape(cp) != "bad" and len(cp) > rem_max:
+                    issues.append(f"Раненый корабль из {len(cp)} клеток длиннее всех, что ещё плавают.")
+                    fatal = True
+                    if by_length:
+                        # такой корабль раньше уже «потопили» по длине — значит, флот не тот
+                        fleet_issue = (f"раненый корабль из {len(cp)} клеток длиннее всех, что "
+                                       "по правилам ещё плавают")
+                    break
         for L, k in used.items():
             if fleet.get(L, 0) < k:
                 issues.append(f"Убитых {L}-палубных больше, чем есть во флоте.")
@@ -242,15 +274,18 @@ def prepare(states, rules: Rules, *, sunk_marked=None, touch=None, trust_sunk=Tr
     unknown = (st == UNKNOWN) & ~forb
     ship_cells_seen = int(((st == HIT) | (st == SUNK)).sum())
     if ship_cells_seen > rules.total_cells:
-        issues.append("Попаданий больше, чем палуб во всём флоте.")
+        issues.append(f"Попаданий {ship_cells_seen}, а палуб во всём флоте {rules.total_cells}. "
+                      "Похоже, на сайте другой состав флота — проверь «Настройки».")
         fatal = True
+        fleet_issue = f"попаданий {ship_cells_seen}, а палуб во всём флоте {rules.total_cells}"
     if required.any() and not remaining:
         issues.append("Все корабли уже убиты, но на поле есть «ранил».")
         fatal = True
     return Prepared(rules=rules, touch=touch, sunk_marked=sunk_marked, states=st,
                     sunk_ships=sunk_ships, remaining=remaining, forbidden=forb,
                     required=required, unknown=unknown, hit_groups=hit_groups,
-                    inferred=inferred, issues=issues, fatal=fatal)
+                    inferred=inferred, by_length=by_length, issues=issues, fatal=fatal,
+                    fleet_issue=fleet_issue)
 
 
 def validate_layout(ships, rules: Rules) -> list:

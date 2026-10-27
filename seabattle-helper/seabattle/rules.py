@@ -24,6 +24,9 @@ RU_LETTERS = "АБВГДЕЖЗИКЛМНОПРСТУФ"
 LAT_LETTERS = "ABCDEFGHIJKLMNOPQRST"
 
 CLASSIC_FLEET = (4, 3, 3, 2, 2, 2, 1, 1, 1, 1)
+# «Морской Бой классический» на Яндекс Играх и Пикабу Играх: есть пятипалубный, однопалубных три
+# (24 палубы вместо 20). Проверено по расстановкам на присланных скриншотах.
+YANDEX_FLEET = (5, 4, 3, 3, 2, 2, 2, 1, 1, 1)
 
 SHIP_NAMES = {
     1: "однопалубный",
@@ -69,10 +72,26 @@ class Rules:
 
 PRESETS = {
     "classic": ("Классика: 1×4, 2×3, 3×2, 4×1, без касаний", Rules()),
+    "yandex": ("Яндекс Игры / Пикабу «Морской бой классический»: 1×5, 1×4, 2×3, 3×2, 3×1, без касаний",
+               Rules(fleet=YANDEX_FLEET)),
     "classic_corners": ("Классика, касание углами разрешено", Rules(touch=TOUCH_CORNERS)),
     "hasbro": ("Hasbro / международная: 5, 4, 3, 3, 2, касаться можно",
                Rules(fleet=(5, 4, 3, 3, 2), touch=TOUCH_ANY)),
 }
+PRESET_SHORT = {
+    "classic": "классика (1×4, 2×3, 3×2, 4×1)",
+    "yandex": "«Морской бой классический» Яндекс Игр / Пикабу (1×5, 1×4, 2×3, 3×2, 3×1)",
+    "classic_corners": "классика с касанием углами",
+    "hasbro": "Hasbro (5, 4, 3, 3, 2)",
+}
+
+
+def preset_key(rules: "Rules"):
+    """Какой готовый набор правил совпадает с этими (размер, флот, касание) → ключ или None."""
+    for key, (_, r) in PRESETS.items():
+        if (r.size, r.fleet, r.touch) == (rules.size, tuple(rules.fleet), rules.touch):
+            return key
+    return None
 
 
 def letters_for(style: str = "ru") -> str:

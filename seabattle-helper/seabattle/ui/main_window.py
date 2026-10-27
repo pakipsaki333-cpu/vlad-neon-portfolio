@@ -14,17 +14,17 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
                                QPushButton, QRadioButton, QScrollArea, QSizeGrip, QSlider, QSpinBox,
                                QTabWidget, QVBoxLayout, QWidget)
 
-from .. import __version__, capture, placement, winutil
+from .. import __version__, capture, fleetcheck, placement, winutil
 from .. import mouse as mouse_mod
 from ..autoplay import AutoPilot, Seen
 from ..board import components
-from ..rules import (HIT, LETTERS_TOP, MISS, NUMBERS_TOP, PRESETS, SHIP_NAMES, SUNK, TOUCH_ANY,
-                     TOUCH_CORNERS, TOUCH_LABELS, TOUCH_NONE, UNKNOWN, Rules, coord_name, fleet_to_text,
-                     parse_fleet, plural)
+from ..rules import (HIT, LETTERS_TOP, MISS, NUMBERS_TOP, PRESET_SHORT, PRESETS, SHIP_NAMES, SUNK,
+                     TOUCH_ANY, TOUCH_CORNERS, TOUCH_LABELS, TOUCH_NONE, UNKNOWN, Rules, coord_name,
+                     fleet_to_text, parse_fleet, plural, preset_key)
 from ..settings import Settings
 from ..solver import analyze
 from ..vision import (BoardTracker, GridGeom, border_signature, detect_label_layout, extract_patches,
-                      find_grids, signature_match)
+                      find_grids, paper_lattice, signature_match)
 from ..icon import glyph_icon
 from . import theme
 from .grid_widget import BoardView
@@ -95,7 +95,11 @@ class FleetBar(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         rem = list(self.remaining)
         x = 2.0
+        cells, ships = sum(self.fleet), len(self.fleet)
         unit = 7.0
+        if cells:
+            # длинный флот (24 палубы на Яндекс Играх) должен влезть целиком
+            unit = max(3.0, min(7.0, (self.width() - 4 - 7 * ships) / cells - 1))
         h = 12.0
         y = (self.height() - h) / 2
         for L in self.fleet:
@@ -232,6 +236,15 @@ class MainWindow(QWidget):
         self._signature_cells = set()
         self._cover_warned = False
         self.auto_log = []                   # (время, клетка, точка экрана) — для самопроверки
+        # проверка состава флота (см. fleetcheck.py)
+        self.halo_watch = fleetcheck.HaloWatch()  # ставит ли сайт сам точки вокруг потопленных
+        self._suspect_since = {}             # группа «потоплена по длине» → с какого момента сайт её не обвёл
+        self._fc_key = None
+        self._fc = fleetcheck.FleetCheck()
+        self._fleet_handled = None           # для какого поля уже разобрались с флотом
+        self._fleet_switched = False         # в этой партии правила уже переключали сами
+        self._fleet_note = ""                # пояснение под подсказкой (почему сменились правила)
+        self._fleet_note_kind = ""           # info — узнали игру / сменили правила; conflict — поле не сходится
 
         self.worker = SolverWorker()
         self.worker.done.connect(self.on_analysis)
@@ -691,6 +704,11 @@ class MainWindow(QWidget):
             "Перебирает тысячи расстановок флота, которые не противоречат полю, и считает, в скольких "
             "из них в клетке стоит корабль. Это и есть процент. При «ранил» добивает, учитывает, что "
             "корабли не касаются, и что вокруг убитого пусто.<br><br>"
+            "<b style='color:#00f0ff'>Правила и флот</b><br>"
+            "На разных сайтах разный флот. В «Морском Бое классическом» на Яндекс Играх и Пикабу — "
+            "1×5, 1×4, 2×3, 3×2, 3×1 (24 палубы): эту игру помощник узнаёт сам и переключает правила. "
+            "Если поле не сходится с флотом (например, пять попаданий в ряд при классике) — переключит "
+            "на подходящие готовые правила или предупредит и остановит автоигру.<br><br>"
             "<b style='color:#00f0ff'>Автоигра</b><br>"
             "Нажми <b>«▶ Авто»</b> (или Ctrl+Alt+A) — помощник сам будет стрелять туда, куда советует: "
             "щёлкнет по клетке, дождётся отметки сайта и выстрелит снова. Пока ход соперника, ждёт. "
@@ -909,9 +927,14 @@ class MainWindow(QWidget):
                                       f"{SHIP_NAMES.get(big, str(big))}")
             alts = [f"{coord_name(rr, cc, letters, lay)} {p * 100:.0f}%" for rr, cc, p in a.top[1:4]]
             self.hint_alt.setText(("Ещё: " + " · ".join(alts)) if alts else "")
-        notes = list(a.issues) + list(a.relaxed)
+        notes = ["⚠ " + t for t in list(a.issues) + list(a.relaxed)]
+        if self._fleet_note:
+            if self._fleet_note_kind == "conflict":
+                notes.insert(0, "⚠ " + self._fleet_note)
+            else:
+                notes.append("ℹ " + self._fleet_note)     # справка не прячет предупреждения решателя
         if notes:
-            self.warn.setText("⚠ " + notes[0])
+            self.warn.setText(notes[0])
             self.warn.show()
         else:
             self.warn.hide()
@@ -921,6 +944,7 @@ class MainWindow(QWidget):
         left = sum(a.remaining) - int((a.states == HIT).sum())
         self.stats.setText(f"Открыто клеток: {shots} · попаданий: {hits} · палуб осталось: {left}")
         self.update_overlay()
+        self._check_fleet()
 
     # ------------------------------------------------------------------ ручная разметка
     def _push_history(self):
@@ -982,6 +1006,7 @@ class MainWindow(QWidget):
             self.tracker.new_game()
         self.manual_states[:] = UNKNOWN
         self.analysis = None
+        self._reset_fleet_check()
         self.refresh_states()
         self.set_status("ok" if self.calibrated else "idle",
                         "Новая партия. " + ("Слежу за полем." if self.calibrated else
@@ -1076,10 +1101,13 @@ class MainWindow(QWidget):
         self.label_layout_detected = None
         self._labels_pending = True
         self._recheck_pending = img is None          # поле из настроек — сверим с экраном
+        self.halo_watch.reset()
+        self._reset_fleet_check()
+        self.set_status("ok", "Поле найдено — слежу за ним. Стреляй туда, где рамка.")
         if img is not None:
             self._labels_pending = False
             self._set_detected_layout(self._detect_labels(img, enemy))
-        self.set_status("ok", "Поле найдено — слежу за ним. Стреляй туда, где рамка.")
+            self._detect_site(img, enemy, my)
         if not self.paused:
             self.timer.start(self.s.interval_ms)
         self.capture_tick()
@@ -1173,13 +1201,16 @@ class MainWindow(QWidget):
         res = self.tracker.process(extract_patches(arr, local), cursor=self.cursor_cell())
         self.last_status = res.status
         self.last_crop = (img.copy(crop), local)
+        self.halo_watch.feed(time.monotonic(), res.new_marks, res.states)
         if self._labels_pending:
             self._labels_pending = False
             self._set_detected_layout(self._detect_labels(img, g))
+            self._detect_site(img, g, self.my_geom)
         if res.status in ("reinit", "newgame"):
             if self.autopilot.active:
                 self.stop_auto("Автоигра выключена: на сайте новая партия или поле сильно изменилось.")
             self.history.clear()
+            self._reset_fleet_check()
             self.signature = sig
             self.set_status("ok", "Новая партия на сайте — начинаю заново." if res.status == "newgame"
                             else "Поле сильно изменилось — перечитал его заново.")
@@ -1193,6 +1224,7 @@ class MainWindow(QWidget):
                                    f"Состояние: {mode}. Кадр обработан за {dt:.0f} мс. "
                                    f"Образцов обучения: {len(self.tracker.examples)}.")
         self.update_overlay()
+        self._check_fleet()
 
     def _recheck_geometry(self, img):
         """После перезапуска поле берётся из настроек — сверяем его с экраном: версия 1.0 на
@@ -1360,6 +1392,9 @@ class MainWindow(QWidget):
         key = self.cmb_preset.itemData(i)
         if key == "custom":
             return
+        self._apply_preset(key, "user")
+
+    def _apply_preset(self, key, source="user"):
         r = PRESETS[key][1]
         self.ed_fleet.setText(fleet_to_text(r.fleet))
         self.sp_size.blockSignals(True)
@@ -1367,9 +1402,12 @@ class MainWindow(QWidget):
         self.sp_size.blockSignals(False)
         for b in self.touch_group.buttons():
             b.setChecked(b.property("touch") == r.touch)
-        self._rules_edited()
+        self._rules_edited(source=source)
+        if source == "user":
+            self.s.rules_source = "user"         # выбрал сам, даже если правила те же — больше не трогаем
+            self._set_fleet_note("")
 
-    def _rules_edited(self):
+    def _rules_edited(self, source="user"):
         try:
             fleet = parse_fleet(self.ed_fleet.text())
             touch = next(b.property("touch") for b in self.touch_group.buttons() if b.isChecked())
@@ -1381,6 +1419,8 @@ class MainWindow(QWidget):
             return
         self.ed_fleet.setStyleSheet("")
         size_changed = rules.size != self.rules.size
+        if rules != self.rules or source != "user":
+            self.s.rules_source = source
         self.rules = rules
         self.s.size, self.s.fleet, self.s.touch, self.s.sunk_marked = (
             rules.size, list(rules.fleet), rules.touch, rules.sunk_marked)
@@ -1515,6 +1555,113 @@ class MainWindow(QWidget):
         self.practice.show()
         self.practice.raise_()
 
+    # ------------------------------------------------------------------ какой флот на сайте
+    def _detect_site(self, img, geom, my=None):
+        """«Морской Бой классический» на Яндекс Играх и Пикабу узнаём по виду: цифры над полем и
+        тетрадный лист вокруг. Флот там свой — 1×5, 1×4, 2×3, 3×2, 3×1 (24 палубы), и с классическим
+        флотом помощник проигрывает: недобивает длинные корабли и ищет лишние однопалубные."""
+        if self.label_layout_detected is None:
+            return
+
+        def paper_around(g, other):
+            m = int(3 * max(g.cw, g.ch)) + 2
+            rect = QRect(int(g.x0) - m, int(g.y0) - m, int(g.width) + 2 * m,
+                         int(g.height) + 2 * m).intersected(img.rect())
+            arr = capture.qimage_to_rgb(img, rect)
+            others = [other.shifted(-rect.x(), -rect.y())] if other is not None else []
+            return paper_lattice(arr, g.shifted(-rect.x(), -rect.y()), others)
+
+        try:
+            # под полем соперника может лежать окно помощника — тогда смотрим и вокруг своего поля
+            paper = paper_around(geom, my) or (my is not None and paper_around(my, geom))
+        except Exception:
+            return
+        cur = preset_key(self.rules)
+        yandex = self.label_layout_detected == NUMBERS_TOP and paper
+        if yandex and cur != "yandex":
+            if self.s.rules_source == "user" or cur is None:
+                self._set_fleet_note("Похоже на «Морской Бой классический» Яндекс Игр / Пикабу — там флот "
+                                     "1×5, 1×4, 2×3, 3×2, 3×1. Если это он, выбери эти правила в «Настройках».")
+                return
+            self._apply_preset("yandex", "auto_site")
+            self._set_fleet_note("Это «Морской Бой классический» (Яндекс Игры / Пикабу): флот 1×5, 1×4, 2×3, "
+                                 "3×2, 3×1 — правила переключены. Вернуть: «Настройки» → «Правила».")
+            self.set_status("ok", "Поле найдено. Узнал «Морской Бой классический» — флот с пятипалубным.")
+        elif (not yandex and self.label_layout_detected == LETTERS_TOP and cur == "yandex"
+              and self.s.rules_source == "auto_site"):
+            # другой сайт — возвращаем классику, которую сами же и поменяли
+            self._apply_preset("classic", "default")
+            self._set_fleet_note("Это не «Морской Бой классический» Яндекса — вернул классический флот.")
+
+    def _reset_fleet_check(self):
+        self._suspect_since = {}
+        self._fleet_handled = None
+        self._fleet_switched = False
+        self._fleet_note = self._fleet_note_kind = ""
+
+    def _set_fleet_note(self, text, kind="info"):
+        self._fleet_note, self._fleet_note_kind = text, (kind if text else "")
+        if self.analysis is not None and self.analysis.states.shape == self.current_states().shape:
+            self.on_analysis(self.analysis, self.worker.latest)
+        elif text:
+            self.warn.setText(("⚠ " if kind == "conflict" else "ℹ ") + text)
+            self.warn.show()
+
+    def _check_fleet(self, now=None):
+        """Сходится ли поле с составом флота. Нет — переключаем готовые правила или предупреждаем
+        (и останавливаем автоигру: стрелять по неверным правилам — верный проигрыш)."""
+        st = self.current_states()
+        key = st.tobytes() + repr(self.rules).encode()
+        if key != self._fc_key:
+            self._fc_key = key
+            self._fc = fleetcheck.inspect(st, self.rules)
+        fc = self._fc
+        now = time.monotonic() if now is None else now
+        live = {frozenset(g) for g in fc.suspects}
+        self._suspect_since = {k: t for k, t in self._suspect_since.items() if k in live}
+        for k in live:
+            self._suspect_since.setdefault(k, now)
+        if self._fleet_handled == key:
+            return
+        reason, suspects = "", []
+        if fc.hard:
+            reason = fc.hard
+        elif self.halo_watch.seen and self.calibrated and not self.paused:
+            busy = bool((self.tracker.pending >= 0).any()) or self.last_status != "ok"
+            old = [sorted(k) for k, t in self._suspect_since.items() if now - t >= fleetcheck.SOFT_WAIT]
+            if old and not busy:
+                g = max(old, key=len)
+                lay = self.labels_layout
+                where = coord_name(*g[0], self.s.letters, lay)
+                if len(g) > 1:
+                    where += "–" + coord_name(*g[-1], self.s.letters, lay)
+                reason = (f"сайт не обвёл точками корабль {where}, хотя по правилам он уже потоплен — "
+                          "значит, корабль длиннее")
+                suspects = old
+        if not reason:
+            pending = self.halo_watch.seen and self._suspect_since
+            if self._fleet_note_kind == "conflict" and not fc.hard and not pending:
+                self._set_fleet_note("")              # поле снова сходится (например, исправили клетку)
+                if self.calibrated and not self.paused and not self.lost:
+                    self.set_status("ok", "Слежу за полем.")
+            return
+        self._fleet_handled = key
+        cur = preset_key(self.rules)
+        sug = fleetcheck.suggest(st, self.rules, suspects) if cur is not None and not self._fleet_switched else None
+        if sug is not None:
+            k, _r = sug
+            self._fleet_switched = True
+            self._apply_preset(k, "auto_board")
+            self._set_fleet_note(f"Флот на сайте другой: {reason}. Правила переключены на {PRESET_SHORT[k]}. "
+                                 "Вернуть: «Настройки» → «Правила».")
+            self.set_status("warn", "Поле не сходилось с флотом — переключил правила (подробности под подсказкой).")
+            return
+        self._set_fleet_note(f"Поле не сходится с правилами: {reason}. Проверь состав флота («Настройки» → "
+                             "«Правила») и отметки на поле помощника.", "conflict")
+        self.set_status("warn", "Поле не сходится с составом флота — подсказкам нельзя верить.")
+        if self.autopilot.active:
+            self.stop_auto("Автоигра остановлена: " + self._fleet_note)
+
     # ------------------------------------------------------------------ автоигра
     def _auto_toggled(self, on):
         if on and not self.autopilot.active:
@@ -1601,8 +1748,12 @@ class MainWindow(QWidget):
         stuck = ""
         if fresh and a.best is None and a.mode != "done":
             stuck = "решатель не находит подходящих клеток — проверь отметки на поле помощника."
+        done = bool(fresh and a.mode == "done")
+        if done and self.halo_watch.seen and self._suspect_since:
+            # «победа» держится на корабле, который сайт так и не обвёл точками, — ждём проверки флота
+            done = False
         return Seen(ready=ready, states=st, best=a.best if fresh else None, fresh=fresh,
-                    done=bool(fresh and a.mode == "done"), busy=busy, stuck=stuck)
+                    done=done, busy=busy, stuck=stuck)
 
     def auto_tick(self):
         ap = self.autopilot

@@ -98,6 +98,18 @@ def test_label_layout_detected(style):
     assert detect_label_layout(im, g) == (NUMBERS_TOP if style == "paper" else LETTERS_TOP)
 
 
+@pytest.mark.parametrize("style", STYLES)
+@pytest.mark.parametrize("cell", [24, 40])
+def test_paper_page_only_on_paper_style(style, cell):
+    """Тетрадный лист вокруг поля (Яндекс Игры, Пикабу) — признак игры с флотом 1×5, 1×4, 2×3, 3×2, 3×1."""
+    from seabattle.vision import paper_lattice
+    off = (cell * 16, cell * 3)
+    im = make_screen(random_marks(4), style=style, cell=cell, size=(cell * 30, cell * 16), offset=off)
+    g = GridGeom(off[0], off[1], cell, cell)
+    own = g.shifted(-cell * (11 if style == "paper" else 14), 0)
+    assert paper_lattice(im, g, [own]) == (style == "paper")
+
+
 def play_tracked(style, seed, shots=40, cell=26, auto_mark=True, dim=True):
     rng = random.Random(seed)
     rules = Rules()

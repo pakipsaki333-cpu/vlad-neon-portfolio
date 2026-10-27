@@ -30,6 +30,9 @@ class Settings:
     sunk_marked: bool = True
     letters: str = "ru"
     labels: str = "auto"                 # auto | letters_top | numbers_top — как подписаны клетки на сайте
+    # кто выбрал правила: default — никто (стоят исходные); user — сам пользователь в «Настройках»;
+    # auto_site — помощник узнал игру по виду поля; auto_board — поле не сходилось с флотом
+    rules_source: str = "default"
     # распознавание
     screen_name: str = ""
     enemy_geom: dict | None = None

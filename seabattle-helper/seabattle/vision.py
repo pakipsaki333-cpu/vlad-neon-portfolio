@@ -614,6 +614,45 @@ def detect_label_layout(img, geom: GridGeom):
     return None
 
 
+def paper_lattice(img, geom: GridGeom, others=()) -> bool:
+    """«Тетрадный лист»: линии клеток с тем же шагом продолжаются и за рамкой поля — так рисуют
+    «Морской Бой классический» на Яндекс Играх и Пикабу. Смотрим полосы снаружи поля (за
+    подписями) с каждой стороны; полосы, задевающие другие поля (others), пропускаем.
+    Под полем подписей нет, поэтому лист под ним — самый надёжный признак."""
+    n, cw, ch = geom.n, geom.cw, geom.ch
+    m = 3.0 * max(cw, ch)
+    H, W = np.asarray(img).shape[:2]
+    cx0, cy0 = int(max(0, geom.x0 - m)), int(max(0, geom.y0 - m))
+    cx1, cy1 = int(min(W, geom.x0 + geom.width + m)), int(min(H, geom.y0 + geom.height + m))
+    a = _f32(np.asarray(img)[cy0:cy1, cx0:cx1])
+    g = geom.shifted(-cx0, -cy0)
+    eh, ev = _edge_maps(a)
+    h, w = a.shape[:2]
+    x0, y0, x1, y1 = g.x0, g.y0, g.x0 + g.width, g.y0 + g.height
+    spec = {
+        # сторона: карта краёв (строки — поперёк линий), начало и шаг решётки, полоса, её рамка
+        "bottom": (ev, x0, cw, y1 + 0.25 * ch, y1 + 1.75 * ch, h, (x0, y1 + 0.25 * ch, x1, y1 + 1.75 * ch)),
+        "top": (ev, x0, cw, y0 - 2.75 * ch, y0 - 1.25 * ch, h, (x0, y0 - 2.75 * ch, x1, y0 - 1.25 * ch)),
+        "left": (eh.T, y0, ch, x0 - 2.75 * cw, x0 - 1.25 * cw, w, (x0 - 2.75 * cw, y0, x0 - 1.25 * cw, y1)),
+        "right": (eh.T, y0, ch, x1 + 1.25 * cw, x1 + 2.75 * cw, w, (x1 + 1.25 * cw, y0, x1 + 2.75 * cw, y1)),
+    }
+    found = {}
+    for side, (E, start, step, lo, hi, lim, (rx0, ry0, rx1, ry1)) in spec.items():
+        if lo < 0 or hi > lim - 1:
+            continue
+        busy = False
+        for o in others:
+            o = o.shifted(-cx0, -cy0)
+            if (rx0 < o.x0 + o.width + 0.5 * o.cw and rx1 > o.x0 - 0.5 * o.cw
+                    and ry0 < o.y0 + o.height + 0.5 * o.ch and ry1 > o.y0 - 0.5 * o.ch):
+                busy = True
+        if busy:
+            continue
+        lv, mv = _lattice_contrast(E, start, step, n, lo, hi)
+        found[side] = lv >= 1.8 * mv + 6
+    return bool(found.get("bottom")) or sum(found.values()) >= 2
+
+
 def border_signature(img, geom: GridGeom, samples: int = 24):
     """Подпись поля — по ней понимаем, что поле не сдвинулось и его не закрыли другим окном.
 

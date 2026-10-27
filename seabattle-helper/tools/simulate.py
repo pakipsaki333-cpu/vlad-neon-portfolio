@@ -1,9 +1,11 @@
 """Бенчмарк: сколько выстрелов нужно, чтобы потопить весь флот, при разных стратегиях.
 
     python tools/simulate.py --games 40 --budget 0.15
+    python tools/simulate.py --fleet yandex        # «Морской бой классический» Яндекс Игр / Пикабу
 
 Стратегии:
   random       — случайная клетка (так играет новичок без системы);
+  naive        — случайная клетка + добивание раненого (так играют простые боты на сайтах);
   hunt-target  — «шахматка» + добивание соседних клеток (так играет опытный человек);
   helper       — наш вероятностный решатель (то, что подсказывает помощник).
 """
@@ -20,7 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from seabattle.board import prepare  # noqa: E402
 from seabattle.game import Referee  # noqa: E402
-from seabattle.rules import HIT, UNKNOWN, Rules  # noqa: E402
+from seabattle.rules import HIT, PRESETS, UNKNOWN, Rules, fleet_to_text, parse_fleet, plural  # noqa: E402
 from seabattle.solver import analyze, random_layout  # noqa: E402
 
 
@@ -29,7 +31,7 @@ def pick_random(st, rules, rng):
     return rng.choice(cells)
 
 
-def pick_hunt_target(st, rules, rng):
+def pick_hunt_target(st, rules, rng, parity=True):
     p = prepare(st, rules)
     n = rules.size
     free = lambda r, c: 0 <= r < n and 0 <= c < n and st[r, c] == UNKNOWN and not p.forbidden[r, c]
@@ -46,7 +48,7 @@ def pick_hunt_target(st, rules, rng):
         opts = [o for o in opts if free(*o)]
         if opts:
             return rng.choice(opts)
-    big = max(p.remaining) if p.remaining else 1
+    big = max(p.remaining) if p.remaining and parity else 1
     par = rng.randrange(big) if big > 1 else 0
     cand = [(r, c) for r in range(n) for c in range(n) if free(r, c) and (r + c) % big == par % big]
     if not cand:
@@ -64,6 +66,8 @@ def play(strategy, rules, rng, budget):
             cell = pick_random(st, rules, rng)
         elif strategy == "hunt-target":
             cell = pick_hunt_target(st, rules, rng)
+        elif strategy == "naive":
+            cell = pick_hunt_target(st, rules, rng, parity=False)
         else:
             cell = analyze(st, rules, budget=budget).best
         ref.shoot(*cell)
@@ -75,10 +79,17 @@ def main():
     ap.add_argument("--games", type=int, default=30)
     ap.add_argument("--budget", type=float, default=0.15)
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--strategies", default="random,hunt-target,helper")
+    ap.add_argument("--strategies", default="random,naive,hunt-target,helper")
+    ap.add_argument("--fleet", default="classic",
+                    help="готовые правила (" + ", ".join(PRESETS) + ") или свой флот: 1x5 1x4 2x3 3x2 3x1")
     args = ap.parse_args()
-    rules = Rules()
-    print(f"Классика 10×10, флот {rules.fleet}, {args.games} партий на стратегию\n")
+    if args.fleet in PRESETS:
+        rules = PRESETS[args.fleet][1]
+    else:
+        rules = Rules(fleet=parse_fleet(args.fleet))
+    decks = plural(rules.total_cells, "палуба", "палубы", "палуб")
+    print(f"Поле {rules.size}×{rules.size}, флот {fleet_to_text(rules.fleet)} ({rules.total_cells} {decks}), "
+          f"касание: {rules.touch}, {args.games} партий на стратегию\n")
     results = {}
     for strat in args.strategies.split(","):
         rng = random.Random(args.seed)
@@ -87,12 +98,17 @@ def main():
         results[strat] = shots
         print(f"{strat:12s} среднее {statistics.mean(shots):5.1f}  медиана {statistics.median(shots):5.1f}"
               f"  лучшая {min(shots):3d}  худшая {max(shots):3d}   ({time.time() - t:.0f} с)", flush=True)
-    if "helper" in results and "hunt-target" in results:
-        # Шанс выиграть дуэль «помощник против опытного человека», если ходят по очереди
-        # (упрощение: учитываем только число выстрелов до полной победы; кто первый — монетка).
-        h, o = results["helper"], results["hunt-target"]
-        wins = sum((a < b) + 0.5 * (a == b) for a in h for b in o) / (len(h) * len(o))
-        print(f"\nПомощник обгоняет «шахматку с добиванием» в {wins * 100:.0f}% пар партий")
+    if "helper" in results:
+        # Шанс выиграть дуэль, если ходят по очереди (упрощение: считаем только число выстрелов
+        # до полной победы; при равенстве — монетка, кто ходил первым).
+        h = results["helper"]
+        for other, who in (("random", "случайную стрельбу"),
+                           ("naive", "простого бота (случайно + добивание)"),
+                           ("hunt-target", "опытного игрока (шахматка + добивание)")):
+            if other in results:
+                o = results[other]
+                wins = sum((a < b) + 0.5 * (a == b) for a in h for b in o) / (len(h) * len(o))
+                print(f"Помощник обгоняет {who} в {wins * 100:.0f}% пар партий")
 
 
 if __name__ == "__main__":

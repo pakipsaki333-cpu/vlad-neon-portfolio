@@ -421,6 +421,8 @@ class Analysis:
     focus_lengths: dict = field(default_factory=dict)  # длина корабля под «ранил» → вероятность
     hit_groups: list = field(default_factory=list)
     elapsed: float = 0.0
+    fleet_issue: str = ""                  # поле противоречит составу флота (см. board.prepare)
+    by_length: list = field(default_factory=list)  # группы, «убитые» только по длине (при строгих правилах)
 
     @property
     def best_prob(self) -> float:
@@ -454,10 +456,12 @@ def analyze(states, rules: Rules, *, budget: float = 0.6, seed=None, cancel=None
     res = None
     relaxed = []
     issues = []
+    strict = None
     for opts, note in ladder:
         p = prepare(st_in, rules, **opts)
         if note is None:
             issues = list(p.issues)
+            strict = p
         if p.fatal:
             if note:
                 relaxed.append(note)
@@ -529,7 +533,9 @@ def analyze(states, rules: Rules, *, budget: float = 0.6, seed=None, cancel=None
                     sunk_ships=prep.sunk_ships, states=st, known_empty=known_empty,
                     samples=samples, method=method, relaxed=relaxed, issues=issues,
                     focus_lengths=focus, hit_groups=prep.hit_groups,
-                    elapsed=time.perf_counter() - t0)
+                    elapsed=time.perf_counter() - t0,
+                    fleet_issue=strict.fleet_issue if strict is not None else "",
+                    by_length=list(strict.by_length) if strict is not None else [])
 
 
 def random_layout(rules: Rules, rng: random.Random | None = None, sweeps: int = 30):

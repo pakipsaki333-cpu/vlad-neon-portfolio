@@ -62,6 +62,14 @@ def test_yandex_marks_recognized(yandex):
     assert np.array_equal(st, exp), np.argwhere(st != exp)
 
 
+def test_yandex_paper_page_recognized(yandex):
+    """По тетрадному листу вокруг поля и цифрам сверху помощник узнаёт игру и её флот."""
+    from seabattle.vision import paper_lattice
+    own, enemy = GridGeom(OWN[0], OWN[1], OWN[2], OWN[2]), GridGeom(ENEMY[0], ENEMY[1], ENEMY[2], ENEMY[2])
+    assert paper_lattice(yandex, enemy, [own])
+    assert paper_lattice(yandex, own, [enemy])
+
+
 def test_yandex_labels_numbers_on_top(yandex):
     for ref in (OWN, ENEMY):
         g = GridGeom(ref[0], ref[1], ref[2], ref[2])
@@ -92,12 +100,14 @@ def _put(img, r, c, patch):
 @pytest.mark.parametrize("seed", [0, 4])
 def test_yandex_tracker_follows_game_with_real_marks(yandex, seed):
     """Партия, собранная из настоящих отметок Яндекса: кляксы-промахи, красные кресты,
-    прорисованный убитый корабль. Помощник должен всё время верно видеть «мимо»/«попал»,
+    прорисованный убитый корабль; флот как на сайте — с пятипалубным. Помощник должен всё время
+    верно видеть «мимо»/«попал», заметить, что сайт сам обводит потопленные корабли точками,
     а в конце решатель — понимать, что флот потоплен."""
     import random
 
+    from seabattle.fleetcheck import HaloWatch
     from seabattle.game import Referee
-    from seabattle.rules import SUNK, Rules
+    from seabattle.rules import PRESETS, SUNK
     from seabattle.solver import analyze, random_layout
     from seabattle.vision import BoardTracker
 
@@ -111,8 +121,9 @@ def test_yandex_tracker_follows_game_with_real_marks(yandex, seed):
     red = (s_mid[..., 0].astype(int) > 140) & (s_mid[..., 0].astype(int) - s_mid[..., 2].astype(int) > 60)
 
     rng = random.Random(seed)
-    rules = Rules()
+    rules = PRESETS["yandex"][1]
     ref = Referee(random_layout(rules, rng), rules, auto_mark=True)
+    halo = HaloWatch()
     ship_of = {rc: sorted(sh) for sh in ref.ships for rc in sh}
     blot_of = {(r, c): blots[rng.randrange(len(blots))] for r in range(10) for c in range(10)}
 
@@ -158,12 +169,14 @@ def test_yandex_tracker_follows_game_with_real_marks(yandex, seed):
         assert match >= 0.55, (rc, ref.shots, match)
         if match > 0.8:
             sig = cur
-        for _ in range(3):
-            tr.process(extract_patches(frame, geom))
+        for k in range(3):
+            res = tr.process(extract_patches(frame, geom))
+            halo.feed(ref.shots * 2.0 + k * 0.3, res.new_marks, res.states)
         loose_truth = np.where(ref.states == SUNK, HIT, ref.states)
         loose_got = np.where(tr.states == SUNK, HIT, tr.states)
         assert np.array_equal(loose_truth, loose_got), (rc, np.argwhere(loose_truth != loose_got))
     assert ref.done
+    assert halo.seen                                     # точки вокруг потопленных ставит сайт
     a = analyze(tr.states, rules, budget=0.1)
     assert a.mode == "done" and not a.remaining
 
