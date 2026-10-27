@@ -8,7 +8,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QWidget
 
 from .. import winutil
-from ..rules import UNKNOWN, coord_name
+from ..rules import LETTERS_TOP, UNKNOWN, coord_name
 from . import theme
 
 BADGE_H = 30
@@ -32,6 +32,7 @@ class Overlay(QWidget):
         self.heat = False
         self.ships = []
         self.letters = "ru"
+        self.label_layout = LETTERS_TOP
         self.captions = True
         self.capture_hidden = False
         self._phase = 0.0
@@ -127,7 +128,7 @@ class Overlay(QWidget):
                 p.drawLine(QPointF(x, y), QPointF(x + dx, y))
                 p.drawLine(QPointF(x, y), QPointF(x, y + dy))
         if self.captions:
-            text = f"Бей: {coord_name(r, c, self.letters)}  {self.best_prob * 100:.0f}%"
+            text = f"Бей: {coord_name(r, c, self.letters, self.label_layout)}  {self.best_prob * 100:.0f}%"
             f = QFont(theme.ui_font(11, True))
             p.setFont(f)
             w = p.fontMetrics().horizontalAdvance(text) + 20

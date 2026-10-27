@@ -1,11 +1,12 @@
 # ⚓ Морской бой — помощник
 
 Маленькое окно поверх браузера: смотрит на экран, само видит «мимо / ранил / убил»
-на поле соперника на любом сайте и подсказывает, куда бить, — с вероятностью попадания
-для каждой клетки. Помогает расставить свои корабли, учится на исправлениях, есть
-рамка-подсказка прямо поверх игры и встроенная тренировка.
+на поле соперника на любом сайте (и на Яндекс Играх) и подсказывает, куда бить, — с вероятностью
+попадания для каждой клетки. Умеет играть само (автоигра щёлкает мышью по полю соперника),
+помогает расставить свои корабли, учится на исправлениях, есть рамка-подсказка прямо поверх игры
+и встроенная тренировка.
 
-➡ **Готовый exe для Windows: [SeaBattleHelper.exe](https://github.com/pakipsaki333-cpu/vlad-neon-portfolio/releases/download/seabattle-v1.0.0/SeaBattleHelper.exe)** (релиз [seabattle-v1.0.0](https://github.com/pakipsaki333-cpu/vlad-neon-portfolio/releases/tag/seabattle-v1.0.0))
+➡ **Готовый exe для Windows: [SeaBattleHelper.exe](https://github.com/pakipsaki333-cpu/vlad-neon-portfolio/releases/download/seabattle-v1.1.0/SeaBattleHelper.exe)** (релиз [seabattle-v1.1.0](https://github.com/pakipsaki333-cpu/vlad-neon-portfolio/releases/tag/seabattle-v1.1.0))
 ➡ **Как пользоваться и как это работает: [`seabattle-helper/`](seabattle-helper/README.md)**
 
 ```bat

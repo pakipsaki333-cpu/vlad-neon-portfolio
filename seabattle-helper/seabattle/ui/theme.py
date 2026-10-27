@@ -95,6 +95,13 @@ QPushButton#Primary {{
     background: #06323a; border: 1px solid {CYAN}; color: {CYAN}; font-weight: 700;
 }}
 QPushButton#Primary:hover {{ background: #0a4652; color: white; }}
+QPushButton#AutoBtn {{
+    background: #2a0b2c; border: 1px solid {MAGENTA}; color: {MAGENTA}; font-weight: 700;
+    padding: 4px 8px; border-radius: 8px;
+}}
+QPushButton#AutoBtn:hover {{ background: #3d1040; color: white; }}
+QPushButton#AutoBtn:checked {{ background: {MAGENTA}; color: #12051a; }}
+#AutoInfo {{ color: {MAGENTA}; background: transparent; font-size: 9pt; }}
 QTabWidget::pane {{ border: none; top: -1px; }}
 QTabBar::tab {{
     background: transparent; color: {MUTED}; padding: 5px 8px; margin-right: 1px;

@@ -7,8 +7,9 @@ import pytest
 from seabattle.game import Referee
 from seabattle.rules import HIT, MISS, SUNK, UNKNOWN, Rules
 from seabattle.solver import random_layout
-from seabattle.vision import (BoardTracker, GridGeom, border_signature, decode_vec, encode_vec,
-                              extract_patches, find_grids, refine_grid, signature_match,
+from seabattle.rules import LETTERS_TOP, NUMBERS_TOP
+from seabattle.vision import (BoardTracker, GridGeom, border_signature, decode_vec, detect_label_layout,
+                              encode_vec, extract_patches, find_grids, refine_grid, signature_match,
                               static_classify)
 from synth import STYLES, make_screen
 
@@ -44,6 +45,57 @@ def test_refine_rough_selection(style):
     assert conf > 0.3
     assert abs(g.x0 - 640) < 1.5 and abs(g.y0 - 160) < 1.5
     assert abs(g.cw - cell) < 0.3 and abs(g.ch - cell) < 0.3
+
+
+def _draw_hint_frame(img, geom, r, c):
+    """Как рамка-подсказка помощника, попавшая в снимок: рамка по линиям клетки + «прицел»."""
+    im = np.array(img, copy=True)
+    x0, y0 = int(round(geom.x0 + c * geom.cw)), int(round(geom.y0 + r * geom.ch))
+    x1, y1 = int(round(x0 + geom.cw)), int(round(y0 + geom.ch))
+    L = int(geom.cw * 0.7)
+    col = (0, 240, 255)
+    for x in (x0, x1):
+        im[max(0, y0 - L):y1 + L, x - 1:x + 2] = col
+    for y in (y0, y1):
+        im[y - 1:y + 2, max(0, x0 - L):x1 + L] = col
+    return im
+
+
+@pytest.mark.parametrize("style", STYLES)
+def test_border_signature_ignores_our_own_hint_frame(style):
+    """Если Windows не спрятала рамку-подсказку от захвата, она рисуется прямо по линиям поля —
+    это не повод считать, что поле пропало."""
+    geom = GridGeom(400, 100, 30, 30)
+    a = make_screen(random_marks(4), style=style, cell=30, size=(900, 520), offset=(400, 100))
+    b = _draw_hint_frame(a, geom, 3, 6)
+    c = _draw_hint_frame(make_screen(random_marks(4), style=style, cell=30, size=(900, 520), offset=(400, 100),
+                                     dim=0.4), geom, 7, 2)
+    sa = border_signature(_draw_hint_frame(a, geom, 1, 1), geom)
+    assert signature_match(sa, border_signature(b, geom), ignore={(1, 1), (3, 6)}) > 0.8
+    assert signature_match(sa, border_signature(c, geom), ignore={(1, 1), (7, 2)}) > 0.8
+
+
+@pytest.mark.parametrize("dx", [-0.45, -0.3, 0.3, 0.45])
+@pytest.mark.parametrize("cell", [24, 40])
+def test_paper_rough_selection_does_not_slip_to_neighbour(dx, cell):
+    """Тетрадный лист: клетки страницы совпадают с клетками полей, поля — через одну клетку.
+    Решётка подходит при любом сдвиге на целую клетку; поле должна выбрать рамка."""
+    off = (cell * 20, cell * 4)
+    im = make_screen(random_marks(4), style="paper", cell=cell, size=(cell * 36, cell * 17), offset=off,
+                     my_ships={(1, 1), (1, 2), (5, 9), (6, 9), (7, 9)})
+    rough = GridGeom(off[0] + dx * cell, off[1] - 0.25 * cell, cell * 1.04, cell * 0.97)
+    g, conf = refine_grid(im, rough)
+    assert conf > 0.3
+    assert abs(g.x0 - off[0]) < 2 and abs(g.y0 - off[1]) < 2, (g, off)
+
+
+@pytest.mark.parametrize("style", STYLES)
+def test_label_layout_detected(style):
+    cell = 26
+    im = make_screen(random_marks(3), style=style, cell=cell, size=(cell * 40, cell * 20),
+                     offset=(cell * 20, cell * 4))
+    g = GridGeom(cell * 20, cell * 4, cell, cell)
+    assert detect_label_layout(im, g) == (NUMBERS_TOP if style == "paper" else LETTERS_TOP)
 
 
 def play_tracked(style, seed, shots=40, cell=26, auto_mark=True, dim=True):
@@ -173,13 +225,18 @@ def test_vec_roundtrip():
     assert np.abs(decode_vec(encode_vec(v)) - v).max() < 0.01
 
 
-def test_border_signature_detects_moved_board():
+@pytest.mark.parametrize("style", STYLES)
+def test_border_signature_detects_moved_board(style):
     st = random_marks(4)
     geom = GridGeom(400, 100, 30, 30)
-    kw = dict(style="notebook", cell=30, size=(900, 520), clutter=True)
+    kw = dict(style=style, cell=30, size=(900, 520), clutter=True)
     a = make_screen(st, offset=(400, 100), **kw)
     b = make_screen(st, offset=(400, 100), dim=0.4, **kw)
     c = make_screen(st, offset=(400, 160), **kw)
+    later = make_screen(random_marks(9, k=45), offset=(400, 100), dim=0.4, **kw)
     sig = border_signature(a, geom)
+    # затемнение (ход соперника) и новые отметки — то же поле: тревоги «поле пропало» быть не должно
     assert signature_match(sig, border_signature(b, geom)) > 0.8
-    assert signature_match(sig, border_signature(c, geom)) < 0.6
+    assert signature_match(sig, border_signature(later, geom)) > 0.6
+    if style in ("notebook", "flat", "paper"):          # где у линий есть рисунок, видно и сдвиг
+        assert signature_match(sig, border_signature(c, geom)) < 0.55

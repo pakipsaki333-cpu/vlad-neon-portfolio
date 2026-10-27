@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import random
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget)
 
@@ -22,6 +22,8 @@ class PracticeBoard(QWidget):
         self.cell = cell
         self.states = None
         self.letters = "ru"
+        self.dimmed = False                      # «ход соперника»: поле притушено, щелчки не считаются
+        self.clicks = []                         # куда щёлкали мышью (для самопроверки автоигры)
         self.margin = 26
         self.setFixedSize(self.margin + n * cell + 8, self.margin + n * cell + 8)
         self.setCursor(Qt.PointingHandCursor)
@@ -35,6 +37,7 @@ class PracticeBoard(QWidget):
         c = int((e.position().x() - ox) // self.cell)
         r = int((e.position().y() - oy) // self.cell)
         if 0 <= r < self.n and 0 <= c < self.n and e.button() == Qt.LeftButton:
+            self.clicks.append((r, c))
             self.shot.emit(r, c)
 
     def paintEvent(self, e):
@@ -71,6 +74,8 @@ class PracticeBoard(QWidget):
         for k in range(n + 1):
             p.drawLine(QPointF(ox + k * cs + 0.5, oy), QPointF(ox + k * cs + 0.5, oy + n * cs))
             p.drawLine(QPointF(ox, oy + k * cs + 0.5), QPointF(ox + n * cs, oy + k * cs + 0.5))
+        if self.dimmed:
+            p.fillRect(QRectF(ox, oy, n * cs + 1, n * cs + 1), QColor(40, 40, 60, 90))
         p.end()
 
 
@@ -88,6 +93,15 @@ class PracticeWindow(QWidget):
         self.info = QLabel()
         self.auto_mark = QCheckBox("Отмечать клетки вокруг убитых")
         self.auto_mark.setChecked(True)
+        self.opp_turn = QCheckBox("После промаха ходит соперник (пауза ~1 с)")
+        self.opp_turn.setToolTip("Как на настоящих сайтах: поле притушено, щелчки не считаются.\n"
+                                 "Удобно проверить автоигру.")
+        self.opponent_delay = 1.0
+        self.dim_on_opponent = True          # притушить поле на время хода соперника (как на многих сайтах)
+        self.busy = False
+        self._busy_timer = QTimer(self)
+        self._busy_timer.setSingleShot(True)
+        self._busy_timer.timeout.connect(self._opponent_done)
         btn = QPushButton("Новая партия")
         btn.clicked.connect(self.new_game)
         title = QLabel("Поле противника")
@@ -101,10 +115,15 @@ class PracticeWindow(QWidget):
         lay.addWidget(self.board, 0, Qt.AlignCenter)
         lay.addWidget(self.info)
         lay.addWidget(self.auto_mark)
+        lay.addWidget(self.opp_turn)
         self.rng = random.Random()
         self.new_game()
 
     def new_game(self):
+        self._busy_timer.stop()
+        self.busy = False
+        self.board.dimmed = False
+        self.ignored_clicks = 0
         self.ref = Referee(random_layout(self.rules, self.rng), self.rules,
                            auto_mark=self.auto_mark.isChecked())
         self.board.states = self.ref.states
@@ -112,6 +131,9 @@ class PracticeWindow(QWidget):
         self.board.update()
 
     def shoot(self, r, c):
+        if self.busy:                       # ход соперника — щелчок не считается
+            self.ignored_clicks += 1
+            return
         if self.ref.done or self.ref.states[r, c] != UNKNOWN:
             return
         self.ref.auto_mark = self.auto_mark.isChecked()
@@ -120,6 +142,18 @@ class PracticeWindow(QWidget):
         left = sum(1 for s in self.ref.sunk if not s)
         if self.ref.done:
             self.info.setText(f"Победа за {self.ref.shots} выстрелов! «Новая партия» — ещё раз.")
+        elif res == MISS and self.opp_turn.isChecked():
+            self.busy = True
+            self.board.dimmed = self.dim_on_opponent
+            self.info.setText(f"{word}. Ход соперника…")
+            self._busy_timer.start(int(self.opponent_delay * 1000))
         else:
             self.info.setText(f"{word}  Выстрелов: {self.ref.shots}.  Кораблей осталось: {left}.")
+        self.board.update()
+
+    def _opponent_done(self):
+        self.busy = False
+        self.board.dimmed = False
+        left = sum(1 for s in self.ref.sunk if not s)
+        self.info.setText(f"Твой ход.  Выстрелов: {self.ref.shots}.  Кораблей осталось: {left}.")
         self.board.update()

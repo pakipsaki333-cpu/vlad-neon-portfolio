@@ -29,6 +29,7 @@ class Settings:
     touch: str = TOUCH_NONE
     sunk_marked: bool = True
     letters: str = "ru"
+    labels: str = "auto"                 # auto | letters_top | numbers_top — как подписаны клетки на сайте
     # распознавание
     screen_name: str = ""
     enemy_geom: dict | None = None
@@ -41,6 +42,8 @@ class Settings:
     budget: float = 0.7
     overlay: bool = True
     overlay_heat: bool = False
+    # автоигра
+    auto_delay: float = 0.8              # пауза перед каждым выстрелом, с
     # окно
     opacity: float = 0.96
     on_top: bool = True

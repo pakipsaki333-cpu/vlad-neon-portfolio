@@ -8,7 +8,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
-from ..rules import HIT, MISS, SUNK, UNKNOWN, letters_for
+from ..rules import HIT, LETTERS_TOP, MISS, NUMBERS_TOP, SUNK, UNKNOWN, letters_for
 from . import theme
 
 
@@ -20,6 +20,7 @@ class BoardView(QWidget):
         super().__init__(parent)
         self.n = n
         self.letters = "ru"
+        self.label_layout = LETTERS_TOP                # как подписаны клетки на сайте
         self.mode = "attack"                     # attack | placement
         self.states = np.zeros((n, n), np.int8)
         self.inferred = None                     # состояния после логического вывода
@@ -123,9 +124,11 @@ class BoardView(QWidget):
         f = QFont(theme.ui_font(max(7, int(cell * 0.30))))
         p.setFont(f)
         p.setPen(QColor(theme.MUTED))
+        top = [str(k + 1) for k in range(n)] if self.label_layout == NUMBERS_TOP else list(letters[:n])
+        side = list(letters[:n]) if self.label_layout == NUMBERS_TOP else [str(k + 1) for k in range(n)]
         for k in range(n):
-            p.drawText(QRectF(ox + k * cell, oy - lab, cell, lab), Qt.AlignCenter, letters[k])
-            p.drawText(QRectF(ox - lab - 2, oy + k * cell, lab, cell), Qt.AlignCenter, str(k + 1))
+            p.drawText(QRectF(ox + k * cell, oy - lab, cell, lab), Qt.AlignCenter, top[k])
+            p.drawText(QRectF(ox - lab - 2, oy + k * cell, lab, cell), Qt.AlignCenter, side[k])
 
         if self.mode == "attack":
             self._paint_attack(p, ox, oy, cell)

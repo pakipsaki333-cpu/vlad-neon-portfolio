@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .rules import HIT, MISS, SUNK, UNKNOWN
+from .rules import HIT, LETTERS_TOP, MISS, NUMBERS_TOP, SUNK, UNKNOWN
 
 PATCH = 16           # размер патча клетки
 MARGIN = 0.16        # отступ от линий сетки внутри клетки (доля размера клетки)
@@ -71,7 +71,7 @@ def _f32(img) -> np.ndarray:
     a = np.asarray(img)
     if a.ndim == 2:
         a = np.repeat(a[..., None], 3, axis=2)
-    return a[..., :3].astype(np.float32)
+    return a[..., :3].astype(np.float32, copy=False)
 
 
 # ----------------------------------------------------------------------------- нарезка клеток
@@ -275,9 +275,24 @@ def _progressions(centers: np.ndarray, n: int, min_step: float, max_step: float)
     return out
 
 
+def _same_grid(a: GridGeom, b: GridGeom) -> bool:
+    return (abs(a.x0 - b.x0) < 0.5 * a.cw and abs(a.y0 - b.y0) < 0.5 * a.ch
+            and abs(a.cw - b.cw) < 0.15 * a.cw)
+
+
 def find_grids(img, n: int = 10, min_cell: int = 12, max_cell: int = 140):
-    """Найти все сетки n×n на изображении. → список GridGeom, слева направо."""
-    eh, ev = _edge_maps(img)
+    """Найти все сетки n×n на изображении. → список GridGeom, слева направо.
+
+    Два способа, результаты объединяются:
+      1) n+1 равноотстоящих линий одной длины — поле нарисовано своими линиями;
+      2) замкнутая жирная рамка, внутри которой есть сетка с шагом сторона/n — так рисуют
+         поля «на тетрадном листе» (Яндекс Игры и др.): линии клеток идут по всей странице,
+         и только рамка показывает, где поле.
+    Каждое найденное поле «прилипает» к самой сильной рамке (сдвиг на клетку-две), чтобы на
+    клетчатом фоне не перепутать поле с соседним квадратом 10×10.
+    """
+    a = _f32(img)
+    eh, ev = _edge_maps(a)
     min_len = int(min_cell * n * 0.9)
     found = []
     for thr in (40.0, 12.0):
@@ -295,10 +310,175 @@ def find_grids(img, n: int = 10, min_cell: int = 12, max_cell: int = 140):
                 if abs(y0 - vy1) > tol or abs(y0 + n * sy - vy2) > tol:
                     continue
                 g = GridGeom(float(x0), float(y0), float(sx), float(sy), n)
-                if not any(abs(g.x0 - f.x0) < sx * 0.5 and abs(g.y0 - f.y0) < sy * 0.5 for f in found):
+                if not any(_same_grid(g, f) for f in found):
                     found.append(g)
-    found.sort(key=lambda g: (g.x0, g.y0))
-    return found
+    for g in _frame_grids(a, eh, ev, n, min_cell, max_cell):
+        if not any(_same_grid(g, f) for f in found):
+            found.append(g)
+    out = []
+    for g in found:
+        g = _snap_to_frame(eh, ev, g)
+        if not any(_same_grid(g, f) for f in out):
+            out.append(g)
+    out.sort(key=lambda g: (g.x0, g.y0))
+    return out
+
+
+# ----------------------------------------------------------------------------- рамка поля
+def _strong_segments(edge: np.ndarray, thr: float, min_len: int, gap: int = 8, merge: int = 6):
+    """Длинные прямые отрезки сильных краёв (по строкам edge). Края одной толстой линии
+    (верхний и нижний) сводим в одну линию по центру. → [(позиция, начало, конец)]."""
+    b = _close1d(edge > thr, gap)
+    rows, xs, xe = _runs(b, min_len)
+    h = max(1, gap // 2)                     # _close1d расширил отрезки на h с каждой стороны
+    order = np.lexsort((xs, rows))
+    lines = []
+    for i in order:
+        r, s, e = int(rows[i]), int(xs[i]) + h, int(xe[i]) - h
+        for L in lines:
+            if r - L[1] <= merge and r - L[0] <= merge + 4 and abs(s - L[2]) <= 8 and abs(e - L[3]) <= 8:
+                L[1] = r
+                L[2] = min(L[2], s)
+                L[3] = max(L[3], e)
+                break
+        else:
+            lines.append([r, r, s, e])
+    return [((r0 + r1) / 2.0 + 0.5, float(s), float(e)) for r0, r1, s, e in lines]
+
+
+def _fill_gaps(v: np.ndarray, gap: int) -> np.ndarray:
+    """1D: закрываем разрывы в True короче gap (линию перекрыла отметка, курсор и т.п.)."""
+    if v.size == 0 or not v.any():
+        return v
+    idx = np.nonzero(v)[0]
+    out = v.copy()
+    for a_, b_ in zip(idx[:-1], idx[1:]):
+        if 1 < b_ - a_ <= gap:
+            out[a_:b_] = True
+    return out
+
+
+def _band_line(B: np.ndarray, pos: float, lo: float, hi: float, tol: int):
+    """Есть ли линия около pos (строки B) на участке [lo, hi) столбцов → (покрытие 0..1, точная позиция)."""
+    p0 = int(round(pos)) - tol
+    p1 = int(round(pos)) + tol + 1
+    p0c, p1c = max(0, p0), min(B.shape[0], p1)
+    l0, l1 = max(0, int(lo)), min(B.shape[1], int(hi))
+    if p1c - p0c < 1 or l1 - l0 < 8:
+        return 0.0, pos
+    band = B[p0c:p1c, l0:l1]
+    cov = float(_fill_gaps(band.any(axis=0), 10).mean())
+    cnt = band.sum(axis=1).astype(np.float64)
+    if cnt.max() <= 0:
+        return cov, pos
+    strong = cnt >= 0.5 * cnt.max()          # оба края толстой линии
+    ks = np.nonzero(strong)[0]
+    return cov, p0c + (ks.min() + ks.max()) / 2.0 + 0.5
+
+
+def _lattice_contrast(E: np.ndarray, start: float, step: float, n: int, lo: float, hi: float):
+    """Сетка внутри рамки: медиана краёв по линиям решётки против середин клеток.
+
+    E — карта краёв, где строки — «поперёк» линий (для вертикальных линий — строки изображения).
+    → (сила на линиях, сила в серединах клеток)."""
+    rows = np.clip(np.linspace(lo, hi, 40).astype(int), 0, E.shape[0] - 1)
+    c0 = int(max(0, np.floor(start - step * 0.5)))
+    c1 = int(min(E.shape[1], np.ceil(start + step * (n + 0.5))))
+    if c1 - c0 < n * 2:
+        return 0.0, 0.0
+    prof = np.median(E[rows, c0:c1], axis=0)
+    r = max(1, int(round(0.06 * step)))
+
+    def val(x):
+        i = int(round(x)) - c0
+        seg = prof[max(0, i - r): max(0, min(prof.size, i + r + 1))]
+        return float(seg.max()) if seg.size else 0.0
+
+    lines = [val(start + k * step) for k in range(1, n)]
+    mids = [val(start + (k + 0.5) * step) for k in range(n)]
+    return float(np.mean(lines)), float(np.mean(mids))
+
+
+def _frame_grids(a: np.ndarray, eh: np.ndarray, ev: np.ndarray, n: int, min_cell: int, max_cell: int,
+                 thr: float = 100.0):
+    """Поля в замкнутой жирной рамке; внутри рамки обязана быть сетка с шагом сторона/n."""
+    Bh = eh > thr                 # строки — y
+    Bv = (ev > thr).T             # строки — x
+    min_len = int(n * min_cell * 0.9)
+    segs = _strong_segments(eh, thr, min_len)
+    out = []
+    for y, xs, xe in segs:
+        W = xe - xs
+        if not n * min_cell * 0.95 <= W <= n * max_cell * 1.05:
+            continue
+        tol = int(max(4, round(0.015 * W)))
+        for sgn in (1, -1):               # отрезок — верх рамки (низ ищем ниже) или её низ
+            ys_ = np.arange(int(y + sgn * 0.85 * W), int(y + sgn * 1.18 * W), sgn)
+            ys_ = ys_[(ys_ >= 0) & (ys_ < Bh.shape[0])]
+            if ys_.size == 0:
+                continue
+            cov_rows = Bh[ys_, max(0, int(xs)):int(xe)].mean(axis=1)
+            if cov_rows.size == 0 or cov_rows.max() < 0.6:
+                continue
+            # среди хороших строк — ближайшая к квадрату
+            good = np.nonzero(cov_rows >= 0.6)[0]
+            j = good[np.argmin(np.abs(np.abs(ys_[good] - y) - W))]
+            cov_b, y2 = _band_line(Bh, ys_[j], xs, xe, 4)
+            if cov_b < 0.8:
+                continue
+            yt, yb = (y, y2) if sgn > 0 else (y2, y)
+            cov_l, xl = _band_line(Bv, xs, yt, yb, tol)
+            cov_r, xr = _band_line(Bv, xe, yt, yb, tol)
+            if cov_l < 0.8 or cov_r < 0.8:
+                continue
+            cw, ch = (xr - xl) / n, (yb - yt) / n
+            if not min_cell <= cw <= max_cell or not 0.85 <= cw / max(ch, 1e-6) <= 1.18:
+                continue
+            g = GridGeom(float(xl), float(yt), float(cw), float(ch), n)
+            lv, mv = _lattice_contrast(ev, g.x0, g.cw, n, g.y0 + 0.1 * g.height, g.y0 + 0.9 * g.height)
+            lh, mh = _lattice_contrast(eh.T, g.y0, g.ch, n, g.x0 + 0.1 * g.width, g.x0 + 0.9 * g.width)
+            if lv < 1.8 * mv + 6 or lh < 1.8 * mh + 6:
+                continue                  # внутри нет сетки с таким шагом — это не поле (окно, картинка)
+            if not any(_same_grid(g, f) for f in out):
+                out.append(g)
+    refined = []
+    for g in out:
+        g2, conf = refine_grid(a, g, search=0.25, spread=0.04, snap=False, edges=(eh, ev))
+        refined.append(g2 if conf >= 0.15 else g)
+    return refined
+
+
+def _line_mass(E: np.ndarray, pos: float, lo: float, hi: float, r: int) -> float:
+    """«Сила» линии около pos: сумма краёв в полосе ±r, медиана по участку [lo, hi)."""
+    p = int(round(pos))
+    if p - r < 0 or p + r + 1 > E.shape[1]:
+        return 0.0
+    rows = np.clip(np.linspace(lo, hi, 48).astype(int), 0, E.shape[0] - 1)
+    return float(np.median(E[rows, p - r:p + r + 1].sum(axis=1)))
+
+
+def _snap_to_frame(eh: np.ndarray, ev: np.ndarray, g: GridGeom, max_shift: int = 2) -> GridGeom:
+    """Сдвинуть сетку на целое число клеток, если так её края попадают на заметно более сильные
+    линии (рамку поля). На клетчатом фоне без этого поле легко «съезжает» на клетку."""
+    n = g.n
+    for axis in (0, 1):
+        if axis == 0:
+            E, start, step = ev, g.x0, g.cw
+            lo, hi = g.y0 + 0.08 * g.height, g.y0 + 0.92 * g.height
+        else:
+            E, start, step = eh.T, g.y0, g.ch
+            lo, hi = g.x0 + 0.08 * g.width, g.x0 + 0.92 * g.width
+        r = max(2, int(round(0.12 * step)))
+        mass = {k: _line_mass(E, start + k * step, lo, hi, r)
+                for k in range(-max_shift, n + max_shift + 1)}
+
+        def score(s):
+            return min(mass[s], mass[s + n])
+
+        best = max(range(-max_shift, max_shift + 1), key=lambda s: (score(s), -abs(s)))
+        if best != 0 and score(best) > 1.35 * score(0) + 8:
+            g = g.shifted(best * step, 0) if axis == 0 else g.shifted(0, best * step)
+    return g
 
 
 def _profile(edge_abs: np.ndarray, axis: int, sigma: float = 1.0):
@@ -310,9 +490,9 @@ def _profile(edge_abs: np.ndarray, axis: int, sigma: float = 1.0):
     return np.convolve(p, k / k.sum(), mode="same")
 
 
-def _fit_lattice(profile: np.ndarray, start0: float, step0: float, n: int, spread=0.15):
-    steps = np.arange(step0 * (1 - spread), step0 * (1 + spread), 0.1)
-    offs = np.arange(start0 - step0, start0 + step0, 0.25)
+def _fit_lattice(profile: np.ndarray, start0: float, step0: float, n: int, spread=0.15, search=1.0):
+    steps = np.arange(step0 * (1 - spread), step0 * (1 + spread) + 0.05, 0.1)
+    offs = np.arange(start0 - step0 * search, start0 + step0 * search + 0.01, 0.25)
     xs_k = np.arange(n + 1)
     best = (-1.0, start0, step0)
     grid_pos = np.arange(profile.size, dtype=np.float64)
@@ -326,27 +506,39 @@ def _fit_lattice(profile: np.ndarray, start0: float, step0: float, n: int, sprea
     return best
 
 
-def refine_grid(img, approx: GridGeom):
-    """Подогнать примерную рамку к настоящим линиям сетки. → (GridGeom, уверенность 0..1)."""
+def refine_grid(img, approx: GridGeom, search: float = 1.0, spread: float = 0.15, snap: bool = True,
+                edges=None):
+    """Подогнать примерную рамку к настоящим линиям сетки. → (GridGeom, уверенность 0..1).
+
+    search — насколько (в клетках) можно сдвинуть начало, spread — шаг (доля).
+    snap — затем «прилепить» к самой сильной рамке: на клетчатом фоне (тетрадный лист)
+    решётка подходит при любом сдвиге на целую клетку, и только рамка говорит, где поле.
+    """
     a = _f32(img)
     H, W = a.shape[:2]
     n = approx.n
     g = approx
     conf = 0.0
-    for _ in range(2):
+    for it in range(2):
         y_lo = int(max(0, g.y0 + 0.5 * g.ch))
         y_hi = int(min(H, g.y0 + g.height - 0.5 * g.ch))
         x_lo = int(max(0, g.x0 + 0.5 * g.cw))
         x_hi = int(min(W, g.x0 + g.width - 0.5 * g.cw))
         if y_hi - y_lo < 4 or x_hi - x_lo < 4:
             return approx, 0.0
-        ev = np.abs(np.diff(a[y_lo:y_hi], axis=1)).max(axis=-1)
-        eh = np.abs(np.diff(a[:, x_lo:x_hi], axis=0)).max(axis=-1)
+        if edges is not None:             # уже посчитанные карты краёв всего изображения
+            ev = edges[1][y_lo:y_hi]
+            eh = edges[0][:, x_lo:x_hi]
+        else:
+            ev = np.abs(np.diff(a[y_lo:y_hi], axis=1)).max(axis=-1)
+            eh = np.abs(np.diff(a[:, x_lo:x_hi], axis=0)).max(axis=-1)
         sig = max(2.0, 0.08 * min(g.cw, g.ch))
         pv = _profile(ev, 0, sig)
         ph = _profile(eh, 1, sig)
-        sx, x0, cw = _fit_lattice(pv, g.x0 - 0.5, g.cw, n)
-        sy, y0, ch = _fit_lattice(ph, g.y0 - 0.5, g.ch, n)
+        # второй проход — только тонкая подгонка вокруг найденного
+        srch, sprd = (search, spread) if it == 0 else (min(search, 0.25), min(spread, 0.03))
+        sx, x0, cw = _fit_lattice(pv, g.x0 - 0.5, g.cw, n, sprd, srch)
+        sy, y0, ch = _fit_lattice(ph, g.y0 - 0.5, g.ch, n, sprd, srch)
         g = GridGeom(x0 + 0.5, y0 + 0.5, cw, ch, n)
         base_v = np.median(pv) + 1e-3
         base_h = np.median(ph) + 1e-3
@@ -355,37 +547,153 @@ def refine_grid(img, approx: GridGeom):
         conf = float(np.clip((min(cx, cy) - 1.3) / 2.5, 0.0, 1.0))
     if conf < 0.15:
         return approx, conf
+    if snap:
+        eh, ev = edges if edges is not None else _edge_maps(a)
+        g = _snap_to_frame(eh, ev, g)
     return g, conf
 
 
-def border_signature(img, geom: GridGeom, samples: int = 24) -> np.ndarray:
-    """Яркость вдоль линий сетки — по ней понимаем, что поле не сдвинулось."""
+def _label_widths(a: np.ndarray, boxes) -> list:
+    """Ширина «чернил» подписи в каждой рамке (None — пусто или за краем)."""
+    H, W = a.shape[:2]
+    out = []
+    for x0, y0, x1, y1 in boxes:
+        x0, y0 = int(max(0, round(x0))), int(max(0, round(y0)))
+        x1, y1 = int(min(W, round(x1))), int(min(H, round(y1)))
+        if x1 - x0 < 4 or y1 - y0 < 4:
+            out.append(None)
+            continue
+        box = a[y0:y1, x0:x1]
+        bg = np.median(box.reshape(-1, 3), axis=0)
+        ink = np.abs(box - bg).max(axis=-1) > 70
+        cols = np.nonzero(ink.sum(axis=0) >= 1)[0]
+        if ink.sum() < 6 or cols.size < 2:
+            out.append(None)
+            continue
+        out.append(int(cols[-1] - cols[0] + 1))
+    return out
+
+
+def detect_label_layout(img, geom: GridGeom):
+    """Где на сайте буквы, а где цифры. → LETTERS_TOP, NUMBERS_TOP или None (не понять).
+
+    Смотрим подписи по всем четырём сторонам поля: подпись «10» почти вдвое шире «2»…«9»,
+    а «К» не шире остальных букв. Так что сторона, где последняя подпись широкая, — цифры.
+    """
+    a = _f32(img)
+    n, cw, ch = geom.n, geom.cw, geom.ch
+    x0, y0, x1, y1 = geom.x0, geom.y0, geom.x0 + geom.width, geom.y0 + geom.height
+    strips = {
+        "top": [(x0 + (k + 0.1) * cw, y0 - 0.9 * ch, x0 + (k + 0.9) * cw, y0 - 0.12 * ch) for k in range(n)],
+        "bottom": [(x0 + (k + 0.1) * cw, y1 + 0.12 * ch, x0 + (k + 0.9) * cw, y1 + 0.9 * ch) for k in range(n)],
+        "left": [(x0 - 0.88 * cw, y0 + (k + 0.1) * ch, x0 - 0.12 * cw, y0 + (k + 0.9) * ch) for k in range(n)],
+        "right": [(x1 + 0.12 * cw, y0 + (k + 0.1) * ch, x1 + 0.88 * cw, y0 + (k + 0.9) * ch) for k in range(n)],
+    }
+    votes = {LETTERS_TOP: 0, NUMBERS_TOP: 0}
+    for side, boxes in strips.items():
+        w = _label_widths(a, boxes)
+        if sum(v is not None for v in w) < n - 2 or w[-1] is None:
+            continue                     # подписей с этой стороны нет (или там что-то другое)
+        mid = [v for v in w[1:-1] if v is not None]
+        if len(mid) < n - 4:
+            continue
+        med = float(np.median(mid))
+        cell = cw if side in ("top", "bottom") else ch
+        if med > 0.75 * cell:
+            continue                     # «подписи» во всю клетку — это не буквы, а что-то ещё
+        numbers_here = w[-1] >= 1.45 * med and w[-1] >= 0.2 * cell
+        horizontal = side in ("top", "bottom")
+        if numbers_here == horizontal:
+            votes[NUMBERS_TOP] += 1
+        else:
+            votes[LETTERS_TOP] += 1
+    if votes[NUMBERS_TOP] > votes[LETTERS_TOP]:
+        return NUMBERS_TOP
+    if votes[LETTERS_TOP] > votes[NUMBERS_TOP]:
+        return LETTERS_TOP
+    return None
+
+
+def border_signature(img, geom: GridGeom, samples: int = 24):
+    """Подпись поля — по ней понимаем, что поле не сдвинулось и его не закрыли другим окном.
+
+    → (яркость вдоль вертикальных линий сетки, вдоль горизонтальных, яркость фона клеток).
+    Фон берём не в центре клетки (там рисуют точки-промахи) и не на диагоналях (крестики),
+    а у верхнего края клетки посередине.
+    """
     a = _f32(img).mean(axis=-1)
     H, W = a.shape
     n = geom.n
     t = (np.arange(samples) + 0.5) / samples
-    xs, ys = [], []
-    for k in range(n + 1):
-        x = geom.x0 + k * geom.cw
-        xs.append(np.full(samples, x))
-        ys.append(geom.y0 + t * geom.height)
-        y = geom.y0 + k * geom.ch
-        xs.append(geom.x0 + t * geom.width)
-        ys.append(np.full(samples, y))
-    xs = np.clip(np.round(np.concatenate(xs)).astype(int), 0, W - 1)
-    ys = np.clip(np.round(np.concatenate(ys)).astype(int), 0, H - 1)
-    return a[ys, xs]
+
+    def pick(xs, ys):
+        xs = np.clip(np.round(xs).astype(int), 0, W - 1)
+        ys = np.clip(np.round(ys).astype(int), 0, H - 1)
+        return a[ys, xs]
+
+    k = np.arange(n + 1)[:, None]
+    vert = pick(geom.x0 + k * geom.cw + 0 * t, geom.y0 + t * geom.height + 0 * k).ravel()
+    horiz = pick(geom.x0 + t * geom.width + 0 * k, geom.y0 + k * geom.ch + 0 * t).ravel()
+    gx, gy = np.meshgrid(geom.x0 + (np.arange(n) + 0.5) * geom.cw, geom.y0 + (np.arange(n) + 0.22) * geom.ch)
+    return vert, horiz, pick(gx, gy).ravel()
 
 
-def signature_match(a: np.ndarray, b: np.ndarray) -> float:
-    if a is None or b is None or a.shape != b.shape:
+def _signature_keep(n: int, samples: int, cells, pad: float = 0.8):
+    """Какие точки подписи оставить, если вокруг клеток cells на линиях может быть нарисовано
+    наше же (рамка-подсказка с «прицелом», когда Windows не прячет её от захвата экрана)."""
+    t = (np.arange(samples) + 0.5) / samples * n          # где точка вдоль линии, в клетках
+    keep_v = np.ones((n + 1, samples), bool)
+    keep_h = np.ones((n + 1, samples), bool)
+    for r, c in cells:
+        for k in (c, c + 1):
+            if 0 <= k <= n:
+                keep_v[k, (t > r - pad) & (t < r + 1 + pad)] = False
+        for k in (r, r + 1):
+            if 0 <= k <= n:
+                keep_h[k, (t > c - pad) & (t < c + 1 + pad)] = False
+    return keep_v.ravel(), keep_h.ravel()
+
+
+def signature_match(a, b, ignore=()) -> float:
+    """Похожесть двух подписей поля: 1 — то же поле на том же месте, около 0 — что-то другое.
+
+    Обычно это корреляция яркости вдоль линий: она не зависит от общей яркости, так что
+    затемнение поля в ход соперника — не помеха. Если же все линии одного цвета (чистый рисунок
+    без шума), корреляцию не посчитать — тогда сравниваем, насколько линии темнее/светлее фона
+    клеток (отдельно вертикальные и горизонтальные): при затемнении это сохраняется, а при
+    прокрутке или чужом окне сверху — нет. ignore — клетки, вокруг которых линии не смотрим
+    (там может быть наша рамка-подсказка).
+    """
+    if a is None or b is None:
         return 0.0
-    da, db = a - a.mean(), b - b.mean()
-    sa, sb = np.sqrt((da * da).sum()), np.sqrt((db * db).sum())
-    if sa < 1e-3 or sb < 1e-3:
-        # ровная заливка без линий: сравниваем просто яркость
-        return float(np.abs(a.mean() - b.mean()) < 25)
-    return float((da * db).sum() / (sa * sb))
+    if len(a) != len(b) or any(x.shape != y.shape for x, y in zip(a, b)):
+        return 0.0
+    va, ha, ca = a
+    vb, hb, cb = b
+    if ignore:
+        n = int(round(np.sqrt(ca.size)))
+        samples = va.size // (n + 1)
+        kv, kh = _signature_keep(n, samples, ignore)
+        if kv.sum() >= 8 and kh.sum() >= 8:
+            va, vb, ha, hb = va[kv], vb[kv], ha[kh], hb[kh]
+    bg_a, bg_b = float(np.median(ca)), float(np.median(cb))
+    worst = 1.0
+    # вертикальные и горизонтальные линии — отдельно: прокрутка по вертикали сдвигает только
+    # горизонтальные линии, а вертикальные остаются «на месте»
+    for xa, xb in ((va, vb), (ha, hb)):
+        if xa.std() >= 1.0 and xb.std() >= 1.0:
+            da, db = xa - xa.mean(), xb - xb.mean()
+            score = float((da * db).sum() / np.sqrt((da * da).sum() * (db * db).sum()))
+        else:
+            con_a = float(np.median(xa)) - bg_a
+            con_b = float(np.median(xb)) - bg_b
+            if abs(con_a) < 4.0:               # линии не отличить от фона — судим по яркости
+                ok = abs(float(xa.mean()) - float(xb.mean())) < 25
+            else:
+                ok = np.sign(con_a) == np.sign(con_b) and abs(con_b) >= 0.3 * abs(con_a)
+            score = 1.0 if ok else 0.0
+        worst = min(worst, score)
+    return worst
 
 
 # ----------------------------------------------------------------------------- трекер

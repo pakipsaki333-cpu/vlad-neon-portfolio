@@ -8,19 +8,23 @@ import time
 import numpy as np
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QCursor, QGuiApplication, QIcon, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame, QGridLayout,
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox, QFrame,
+                               QGridLayout,
                                QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox,
                                QPushButton, QRadioButton, QScrollArea, QSizeGrip, QSlider, QSpinBox,
                                QTabWidget, QVBoxLayout, QWidget)
 
-from .. import capture, placement, winutil
+from .. import __version__, capture, placement, winutil
+from .. import mouse as mouse_mod
+from ..autoplay import AutoPilot, Seen
 from ..board import components
-from ..rules import (HIT, MISS, PRESETS, SHIP_NAMES, SUNK, TOUCH_ANY, TOUCH_CORNERS, TOUCH_LABELS,
-                     TOUCH_NONE, UNKNOWN, Rules, coord_name, fleet_to_text, parse_fleet, plural)
+from ..rules import (HIT, LETTERS_TOP, MISS, NUMBERS_TOP, PRESETS, SHIP_NAMES, SUNK, TOUCH_ANY,
+                     TOUCH_CORNERS, TOUCH_LABELS, TOUCH_NONE, UNKNOWN, Rules, coord_name, fleet_to_text,
+                     parse_fleet, plural)
 from ..settings import Settings
 from ..solver import analyze
-from ..vision import (BoardTracker, GridGeom, border_signature, extract_patches, find_grids,
-                      signature_match)
+from ..vision import (BoardTracker, GridGeom, border_signature, detect_label_layout, extract_patches,
+                      find_grids, signature_match)
 from ..icon import glyph_icon
 from . import theme
 from .grid_widget import BoardView
@@ -120,6 +124,7 @@ class DebugView(QWidget):
         self.img = None
         self.geom = None
         self.states = None
+        self.capture_hidden = False
         self.info = QLabel()
         self.info.setObjectName("Sub")
         self.info.setWordWrap(True)
@@ -131,10 +136,19 @@ class DebugView(QWidget):
         lay.addWidget(self.info)
         self.resize(420, 470)
 
+    def showEvent(self, e):
+        super().showEvent(e)
+        # окно не должно попадать в захват: если положить его на поле, помощник увидит сам себя
+        self.capture_hidden = winutil.exclude_from_capture(int(self.winId()), True)
+
     def update_view(self, qimg, geom, states, status):
         if not self.isVisible() or qimg is None or geom is None:
             return
-        pm = QPixmap.fromImage(qimg)
+        # снимок экрана при масштабе 125–150% несёт devicePixelRatio>1, и QPainter стал бы рисовать
+        # сетку в «логических» единицах — она разъезжалась с картинкой. Рисуем в пикселях снимка.
+        img = qimg.copy()
+        img.setDevicePixelRatio(1.0)
+        pm = QPixmap.fromImage(img)
         p = QPainter(pm)
         p.setRenderHint(QPainter.Antialiasing)
         n = geom.n
@@ -156,7 +170,14 @@ class DebugView(QWidget):
                 p.drawRect(rect)
                 p.drawText(rect, Qt.AlignRight | Qt.AlignBottom, names[s])
         p.end()
-        self.canvas.setPixmap(pm.scaled(self.canvas.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        dpr = self.canvas.devicePixelRatioF() or 1.0
+        size = self.canvas.size()
+        spm = pm.scaled(int(size.width() * dpr), int(size.height() * dpr), Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation)
+        spm.setDevicePixelRatio(dpr)
+        self.canvas.setPixmap(spm)
+        if not self.capture_hidden:
+            status += " Не клади это окно на поле — помощник увидит его вместо игры."
         self.info.setText(status)
 
 
@@ -198,6 +219,18 @@ class MainWindow(QWidget):
         self.paused = False
         self.placement_ships = []
         self.placement_rng = random.Random()
+        self.last_status = None              # что сказал трекер на последнем кадре
+        self.label_layout_detected = None    # как подписаны клетки на сайте (узнаём по снимку)
+        self._labels_pending = False
+        # автоигра
+        self.mouse = mouse_mod.default_mouse()
+        self.autopilot = AutoPilot(delay=self.s.auto_delay)
+        self._auto_cursor = None             # где мы оставили курсор (если сдвинулся — это человек)
+        self._busy_since = None
+        self._overlay_cells = []             # куда недавно рисовалась рамка-подсказка
+        self._signature_cells = set()
+        self._cover_warned = False
+        self.auto_log = []                   # (время, клетка, точка экрана) — для самопроверки
 
         self.worker = SolverWorker()
         self.worker.done.connect(self.on_analysis)
@@ -207,6 +240,7 @@ class MainWindow(QWidget):
         self.overlay.letters = self.s.letters
         self.ghost = Overlay("ships")
         self.ghost.letters = self.s.letters
+        self.overlay.label_layout = self.ghost.label_layout = self.labels_layout
         self.debug = DebugView()
         self.practice = None
 
@@ -218,6 +252,9 @@ class MainWindow(QWidget):
         self.save_timer = QTimer(self)
         self.save_timer.setSingleShot(True)
         self.save_timer.timeout.connect(self.save_settings)
+        self.auto_timer = QTimer(self)
+        self.auto_timer.setInterval(100)
+        self.auto_timer.timeout.connect(self.auto_tick)
 
         self.refresh_states(analyze_now=True)
         if self.s.enemy_geom and self.s.screen_name:
@@ -301,6 +338,15 @@ class MainWindow(QWidget):
         row.addWidget(self.hint)
         row.addStretch(1)
         row.addWidget(self.hint_pct)
+        self.btn_auto = QPushButton("▶ Авто")
+        self.btn_auto.setObjectName("AutoBtn")
+        self.btn_auto.setCheckable(True)
+        self.btn_auto.setFocusPolicy(Qt.NoFocus)
+        self.btn_auto.setToolTip("Автоигра: помощник сам стреляет по полю соперника (Ctrl+Alt+A).\n"
+                                 "Двинешь мышь — автоигра встанет на паузу.")
+        self.btn_auto.toggled.connect(self._auto_toggled)
+        row.addSpacing(6)
+        row.addWidget(self.btn_auto)
         cl.addLayout(row)
         self.hint_sub = QLabel("")
         self.hint_sub.setObjectName("Sub")
@@ -309,6 +355,11 @@ class MainWindow(QWidget):
         self.hint_alt = QLabel("")
         self.hint_alt.setObjectName("Sub")
         cl.addWidget(self.hint_alt)
+        self.auto_info = QLabel("")
+        self.auto_info.setObjectName("AutoInfo")
+        self.auto_info.setWordWrap(True)
+        self.auto_info.hide()
+        cl.addWidget(self.auto_info)
         self.warn = QLabel("")
         self.warn.setObjectName("Warn")
         self.warn.setWordWrap(True)
@@ -356,6 +407,7 @@ class MainWindow(QWidget):
         lay.setSpacing(6)
         self.view = BoardView(self.rules.size)
         self.view.letters = self.s.letters
+        self.view.label_layout = self.labels_layout
         self.view.cellClicked.connect(self.cycle_cell)
         self.view.cellMenu.connect(self.cell_menu)
         self.view.setToolTip("Щелчок — сменить отметку (мимо → ранил → убил → пусто).\n"
@@ -416,6 +468,7 @@ class MainWindow(QWidget):
         lay.addWidget(self.place_text)
         self.place_view = BoardView(self.rules.size)
         self.place_view.letters = self.s.letters
+        self.place_view.label_layout = self.labels_layout
         self.place_view.interactive = False
         lay.addWidget(self.place_view, 1)
         self.place_score = QLabel("")
@@ -500,6 +553,20 @@ class MainWindow(QWidget):
         self.cmb_letters.currentIndexChanged.connect(self._letters_changed)
         lr.addWidget(self.cmb_letters, 1)
         gl.addLayout(lr)
+        lr = QHBoxLayout()
+        lr.addWidget(QLabel("Подписи:"))
+        self.cmb_labels = QComboBox()
+        self.cmb_labels.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_labels.setMinimumContentsLength(8)
+        self.cmb_labels.addItem("Как на сайте (сам)", "auto")
+        self.cmb_labels.addItem("Буквы сверху: Д5 = столбец Д", LETTERS_TOP)
+        self.cmb_labels.addItem("Цифры сверху: Д5 = строка Д", NUMBERS_TOP)
+        self.cmb_labels.setToolTip("Как называть клетки. На Яндекс Играх цифры сверху, а буквы сбоку —\n"
+                                   "тогда «Д5» — это строка Д, столбец 5. «Сам» — помощник смотрит на поле.")
+        self.cmb_labels.setCurrentIndex(max(0, self.cmb_labels.findData(self.s.labels)))
+        self.cmb_labels.currentIndexChanged.connect(self._labels_changed)
+        lr.addWidget(self.cmb_labels, 1)
+        gl.addLayout(lr)
         lay.addWidget(g)
         self._sync_preset_combo()
 
@@ -557,6 +624,28 @@ class MainWindow(QWidget):
         gl.addWidget(self.cb_heat)
         lay.addWidget(g)
 
+        g = QGroupBox("Автоигра")
+        gl = QVBoxLayout(g)
+        ar = QHBoxLayout()
+        ar.addWidget(QLabel("Пауза перед выстрелом:"))
+        self.sp_auto_delay = QDoubleSpinBox()
+        self.sp_auto_delay.setRange(0.2, 5.0)
+        self.sp_auto_delay.setSingleStep(0.1)
+        self.sp_auto_delay.setDecimals(1)
+        self.sp_auto_delay.setSuffix(" с")
+        self.sp_auto_delay.setValue(float(self.s.auto_delay))
+        self.sp_auto_delay.setToolTip("Сколько ждать перед каждым выстрелом (0.2–5 с)")
+        self.sp_auto_delay.valueChanged.connect(self._auto_settings_changed)
+        ar.addWidget(self.sp_auto_delay)
+        gl.addLayout(ar)
+        an = QLabel("Кнопка «▶ Авто» или Ctrl+Alt+A. Помощник сам щёлкает по полю соперника, "
+                    "ждёт ответа сайта и стреляет дальше. Двинешь мышь — пауза. "
+                    "Расставлять корабли и начинать партию нужно самому.")
+        an.setObjectName("Sub")
+        an.setWordWrap(True)
+        gl.addWidget(an)
+        lay.addWidget(g)
+
         g = QGroupBox("Окно")
         gl = QVBoxLayout(g)
         gl.addWidget(QLabel("Прозрачность окна:"))
@@ -601,9 +690,14 @@ class MainWindow(QWidget):
             "Перебирает тысячи расстановок флота, которые не противоречат полю, и считает, в скольких "
             "из них в клетке стоит корабль. Это и есть процент. При «ранил» добивает, учитывает, что "
             "корабли не касаются, и что вокруг убитого пусто.<br><br>"
+            "<b style='color:#00f0ff'>Автоигра</b><br>"
+            "Нажми <b>«▶ Авто»</b> (или Ctrl+Alt+A) — помощник сам будет стрелять туда, куда советует: "
+            "щёлкнет по клетке, дождётся отметки сайта и выстрелит снова. Пока ход соперника, ждёт. "
+            "Чтобы остановить — просто двинь мышь. Расставить корабли и начать партию нужно самому. "
+            "Играть так с живыми людьми нечестно — лучше против компьютера.<br><br>"
             "<b style='color:#ff2bd6'>Честно</b>: гарантии победы нет — удача никуда не девается. "
-            "Но в среднем помощнику нужно заметно меньше выстрелов, чем человеку. "
-            "Он только подсказывает и ничего не нажимает за тебя.")
+            "Но в среднем помощнику нужно заметно меньше выстрелов, чем человеку.<br><br>"
+            f"<span style='color:#7f8db0'>Версия {__version__}</span>")
         txt.setWordWrap(True)
         txt.setTextFormat(Qt.RichText)
         lay.addWidget(txt)
@@ -677,6 +771,8 @@ class MainWindow(QWidget):
             self.new_game()
         elif hid == 4:
             self.start_calibration()
+        elif hid == 5:
+            self.toggle_auto()
 
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton and e.position().y() < 40:
@@ -738,6 +834,7 @@ class MainWindow(QWidget):
 
     def closeEvent(self, e):
         self.timer.stop()
+        self.auto_timer.stop()
         self.save_settings()
         winutil.unregister_hotkeys(self._hotkey_hwnd or int(self.winId()), self.hotkey_ids)
         self.worker.stop()
@@ -781,7 +878,7 @@ class MainWindow(QWidget):
         if a.states.shape != st.shape:
             return
         self.view.set_attack(st, a)
-        letters = self.s.letters
+        letters, lay = self.s.letters, self.labels_layout
         if a.mode == "done":
             self.hint.setText("Победа! 🎉")
             self.hint_pct.setText("")
@@ -794,7 +891,9 @@ class MainWindow(QWidget):
             self.hint_alt.setText("")
         else:
             r, c = a.best
-            self.hint.setText(f"Бей: {coord_name(r, c, letters)}")
+            name = coord_name(r, c, letters, lay)
+            # буква другим цветом: русская «З» в крупном шрифте похожа на тройку («З4» ≠ «34»)
+            self.hint.setText(f"Бей: <span style='color:#ffffff'>{name[0]}</span>{name[1:]}")
             self.hint_pct.setText(f"{a.best_prob * 100:.0f}%")
             if a.mode == "target":
                 lens = sorted(a.focus_lengths.items(), key=lambda t: -t[1])
@@ -807,7 +906,7 @@ class MainWindow(QWidget):
                 big = max(a.remaining) if a.remaining else 0
                 self.hint_sub.setText(f"Ищем корабли · самый большой оставшийся — "
                                       f"{SHIP_NAMES.get(big, str(big))}")
-            alts = [f"{coord_name(rr, cc, letters)} {p * 100:.0f}%" for rr, cc, p in a.top[1:4]]
+            alts = [f"{coord_name(rr, cc, letters, lay)} {p * 100:.0f}%" for rr, cc, p in a.top[1:4]]
             self.hint_alt.setText(("Ещё: " + " · ".join(alts)) if alts else "")
         notes = list(a.issues) + list(a.relaxed)
         if notes:
@@ -855,7 +954,7 @@ class MainWindow(QWidget):
 
     def cell_menu(self, r, c, gpos):
         m = QMenu(self)
-        name = coord_name(r, c, self.s.letters)
+        name = coord_name(r, c, self.s.letters, self.labels_layout)
         m.addSection(name)
         acts = [("Мимо", MISS, False), ("Ранил", HIT, False), ("Убил (весь корабль)", SUNK, True),
                 ("Пусто — не стреляли", UNKNOWN, False)]
@@ -898,6 +997,8 @@ class MainWindow(QWidget):
         return ws
 
     def start_calibration(self):
+        if self.autopilot.active:
+            self.stop_auto("Автоигра выключена: ищем поле заново.")
         hidden = self._windows_to_hide()
         for w in hidden:
             w.hide()
@@ -970,6 +1071,12 @@ class MainWindow(QWidget):
         self.history.clear()
         self.analysis = None
         self.btn_forget.setText(f"Сбросить обучение ({len(self.tracker.examples)})")
+        self.last_status = None
+        self.label_layout_detected = None
+        self._labels_pending = True
+        if img is not None:
+            self._labels_pending = False
+            self._set_detected_layout(self._detect_labels(img, enemy))
         self.set_status("ok", "Поле найдено — слежу за ним. Стреляй туда, где рамка.")
         if not self.paused:
             self.timer.start(self.s.interval_ms)
@@ -1032,17 +1139,41 @@ class MainWindow(QWidget):
         arr = capture.qimage_to_rgb(img, crop)
         local = g.shifted(-crop.x(), -crop.y())
         sig = border_signature(arr, local)
+        # где рамка-подсказка могла попасть в снимок (если Windows не прячет её от захвата)
+        drawn = set(self._overlay_cells)
+        if self.overlay.isVisible() and self.overlay.best is not None:
+            drawn.add(tuple(self.overlay.best))
         if self.signature is None:
-            self.signature = sig
-        elif signature_match(self.signature, sig) < 0.55:
-            self._board_lost("Поле не на прежнем месте (прокрутка, другое окно сверху?).")
-            return
+            self.signature, self._signature_cells = sig, drawn
+        else:
+            match = signature_match(self.signature, sig, ignore=drawn | self._signature_cells)
+            if match < 0.55:
+                self._board_lost("Поле не на прежнем месте (прокрутка, другое окно сверху?).")
+                return
+            if match > 0.8:
+                # отметки копятся и понемногу меняют вид линий (кляксы и крестики на Яндексе
+                # залезают на клетчатые линии) — сравниваем с недавним видом, а не с самым первым
+                self.signature, self._signature_cells = sig, drawn
         if self.lost:
             self.lost = 0
             self.set_status("ok", "Поле снова видно — слежу.")
+        cover = self._own_window_over_board() is not None
+        if cover != self._cover_warned:
+            self._cover_warned = cover
+            if cover:
+                self.set_status("warn", "Окно помощника лежит на поле соперника — отодвинь его, "
+                                        "чтобы поле было видно целиком.")
+            else:
+                self.set_status("ok", "Слежу за полем.")
         res = self.tracker.process(extract_patches(arr, local), cursor=self.cursor_cell())
+        self.last_status = res.status
         self.last_crop = (img.copy(crop), local)
+        if self._labels_pending:
+            self._labels_pending = False
+            self._set_detected_layout(self._detect_labels(img, g))
         if res.status in ("reinit", "newgame"):
+            if self.autopilot.active:
+                self.stop_auto("Автоигра выключена: на сайте новая партия или поле сильно изменилось.")
             self.history.clear()
             self.signature = sig
             self.set_status("ok", "Новая партия на сайте — начинаю заново." if res.status == "newgame"
@@ -1058,7 +1189,20 @@ class MainWindow(QWidget):
                                    f"Образцов обучения: {len(self.tracker.examples)}.")
         self.update_overlay()
 
+    def _own_window_over_board(self):
+        """Какое окно помощника лежит на поле соперника (None — никакое)."""
+        rect = self._board_rect_logical(self.enemy_geom) if self.frame_source is None else None
+        if rect is None:
+            return None
+        r = rect.toAlignedRect()
+        for w in (self, self.debug):
+            if w.isVisible() and not w.isMinimized() and w.frameGeometry().intersects(r):
+                return w
+        return None
+
     def _board_lost(self, why):
+        if self._own_window_over_board() is not None:
+            why = "Окно помощника лежит на поле соперника — отодвинь его в сторону."
         self.lost += 1
         if self.lost >= 3:
             self.set_status("lost", why + " Ищу поле…")
@@ -1075,9 +1219,9 @@ class MainWindow(QWidget):
         grids = find_grids(capture.qimage_to_rgb(img), n=self.rules.size)
         g0 = self.enemy_geom
         same = [g for g in grids if abs(g.cw - g0.cw) < 0.08 * g0.cw]
-        if self.my_geom is not None:
-            # среди похожих выбираем то, что ближе к прежнему месту поля соперника
-            same.sort(key=lambda g: abs(g.x0 - g0.x0) + abs(g.y0 - g0.y0))
+        # среди похожих — ближайшее к прежнему месту поля соперника (своё поле обычно того же
+        # размера и рядом: на Яндексе оно слева, и брать «первое слева» нельзя)
+        same.sort(key=lambda g: abs(g.x0 - g0.x0) + abs(g.y0 - g0.y0))
         if same:
             dx, dy = same[0].x0 - g0.x0, same[0].y0 - g0.y0
             self.enemy_geom = same[0]
@@ -1107,6 +1251,11 @@ class MainWindow(QWidget):
             return
         self.overlay.place(rect, self.enemy_geom.n)
         self.overlay.set_attack(self.analysis, self.current_states(), heat=self.s.overlay_heat)
+        if self.overlay.best is not None:
+            cell = tuple(self.overlay.best)
+            if cell in self._overlay_cells:
+                self._overlay_cells.remove(cell)
+            self._overlay_cells = (self._overlay_cells + [cell])[-3:]
         if not self.overlay.isVisible():
             self.overlay.show()
 
@@ -1149,14 +1298,15 @@ class MainWindow(QWidget):
         verdict = "низкая — хорошо против ботов" if score < 35 else (
             "высокая: бот найдёт быстрее, люди — нет" if score > 65 else "средняя")
         self.place_score.setText(f"Предсказуемость для бота: <b>{score:.0f}</b>/100 — {verdict}")
-        self.place_list.setText(placement.describe_short(ships, self.s.letters))
-        self.place_list.setToolTip("\n".join(placement.describe(ships, self.s.letters)))
+        self.place_list.setText(placement.describe_short(ships, self.s.letters, self.labels_layout))
+        self.place_list.setToolTip("\n".join(placement.describe(ships, self.s.letters, self.labels_layout)))
         if self.btn_ghost.isChecked():
             self.ghost.set_ships(ships)
         self._later_save()
 
     def copy_placement(self):
-        QGuiApplication.clipboard().setText("\n".join(placement.describe(self.placement_ships, self.s.letters)))
+        QGuiApplication.clipboard().setText("\n".join(placement.describe(self.placement_ships, self.s.letters,
+                                                                          self.labels_layout)))
         self.place_score.setText(self.place_score.text().split("  ✓")[0] + "  ✓ скопировано")
 
     # ------------------------------------------------------------------ настройки
@@ -1219,13 +1369,61 @@ class MainWindow(QWidget):
         self.s.letters = self.cmb_letters.currentData()
         for v in (self.view, self.place_view):
             v.letters = self.s.letters
-            v.update()
         self.overlay.letters = self.ghost.letters = self.s.letters
+        self._refresh_names()
+        self._later_save()
+
+    def _refresh_names(self):
+        """Перерисовать всё, где есть названия клеток (буквы/подписи поменялись)."""
+        lay = self.labels_layout
+        for v in (self.view, self.place_view):
+            v.label_layout = lay
+            v.update()
+        self.overlay.label_layout = self.ghost.label_layout = lay
+        self.overlay.update()
         if self.analysis is not None:
             self.on_analysis(self.analysis, self.worker.latest)
         if self.placement_ships:
-            self.place_list.setText(placement.describe_short(self.placement_ships, self.s.letters))
-            self.place_list.setToolTip("\n".join(placement.describe(self.placement_ships, self.s.letters)))
+            self.place_list.setText(placement.describe_short(self.placement_ships, self.s.letters, lay))
+            self.place_list.setToolTip("\n".join(placement.describe(self.placement_ships, self.s.letters, lay)))
+
+    @property
+    def labels_layout(self):
+        if self.s.labels in (LETTERS_TOP, NUMBERS_TOP):
+            return self.s.labels
+        return self.label_layout_detected or LETTERS_TOP
+
+    def _labels_changed(self, _i):
+        self.s.labels = self.cmb_labels.currentData()
+        self._refresh_names()
+        self._update_labels_hint()
+        self._later_save()
+
+    def _update_labels_hint(self):
+        if not hasattr(self, "cmb_labels"):
+            return
+        det = {LETTERS_TOP: "буквы сверху", NUMBERS_TOP: "цифры сверху"}.get(self.label_layout_detected)
+        self.cmb_labels.setItemText(0, f"Как на сайте ({det})" if det else "Как на сайте (сам)")
+
+    def _detect_labels(self, img, geom):
+        """Посмотреть на подписи вокруг поля: где буквы, где цифры (Яндекс Игры — цифры сверху)."""
+        try:
+            m = int(max(geom.cw, geom.ch) * 1.3) + 2
+            rect = QRect(int(geom.x0) - m, int(geom.y0) - m, int(geom.width) + 2 * m, int(geom.height) + 2 * m)
+            rect = rect.intersected(img.rect())
+            arr = capture.qimage_to_rgb(img, rect)
+            found = detect_label_layout(arr, geom.shifted(-rect.x(), -rect.y()))
+        except Exception:
+            found = None
+        if found is None and self.my_geom is not None and geom is not self.my_geom:
+            return self._detect_labels(img, self.my_geom)
+        return found
+
+    def _set_detected_layout(self, found):
+        if found is not None and found != self.label_layout_detected:
+            self.label_layout_detected = found
+            self._refresh_names()
+        self._update_labels_hint()
 
     def _recog_changed(self, *_):
         self.s.sensitivity = self.sl_sens.value() / 100
@@ -1260,6 +1458,15 @@ class MainWindow(QWidget):
 
     # ------------------------------------------------------------------ прочее
     def show_debug(self):
+        if not self.debug.isVisible():
+            # рядом с помощником, а не посреди экрана (там обычно и лежит поле игры)
+            fg = self.frameGeometry()
+            avail = (self.screen() or QGuiApplication.primaryScreen()).availableGeometry()
+            w, h = self.debug.width(), self.debug.height()
+            x = fg.left() - w - 12 if fg.left() - w - 12 >= avail.left() else fg.right() + 12
+            x = max(avail.left(), min(x, avail.right() - w))
+            y = max(avail.top(), min(fg.top(), avail.bottom() - h))
+            self.debug.move(x, y)
         self.debug.show()
         self.debug.raise_()
         if self.last_crop is not None:
@@ -1272,3 +1479,175 @@ class MainWindow(QWidget):
             self.practice = PracticeWindow(self.rules, self.s.letters)
         self.practice.show()
         self.practice.raise_()
+
+    # ------------------------------------------------------------------ автоигра
+    def _auto_toggled(self, on):
+        if on and not self.autopilot.active:
+            self.start_auto()
+        elif not on and self.autopilot.active:
+            self.stop_auto("Автоигра выключена.")
+
+    def toggle_auto(self):
+        if self.autopilot.active:
+            self.stop_auto("Автоигра выключена.")
+        else:
+            self.start_auto()
+
+    def start_auto(self):
+        why = ""
+        if not self.mouse.available:
+            why = self.mouse.why
+        elif not self.calibrated or self.frame_source is not None:
+            why = "Сначала найди поле соперника: кнопка «Найти поле» (Ctrl+Alt+R)."
+        if why:
+            self._sync_auto_ui()
+            self.auto_info.setText(why)
+            self.auto_info.show()
+            return False
+        if self.paused:
+            self.btn_pause.setChecked(False)
+        self.autopilot.delay = self.s.auto_delay
+        self.autopilot.start(time.monotonic())
+        self._auto_cursor = None
+        self.auto_timer.start()
+        self._sync_auto_ui()
+        return True
+
+    def stop_auto(self, note=""):
+        self.autopilot.stop(note)
+        self.auto_timer.stop()
+        self._auto_cursor = None
+        self._sync_auto_ui()
+
+    def _auto_settings_changed(self, *_):
+        self.s.auto_delay = round(float(self.sp_auto_delay.value()), 1)
+        self.autopilot.delay = self.s.auto_delay
+        self._later_save()
+
+    def _sync_auto_ui(self, now=None):
+        ap = self.autopilot
+        self.btn_auto.blockSignals(True)
+        self.btn_auto.setChecked(ap.active)
+        self.btn_auto.blockSignals(False)
+        self.btn_auto.setText("■ Стоп" if ap.active else "▶ Авто")
+        if ap.active:
+            now = time.monotonic() if now is None else now
+            left = ap.countdown(now)
+            if left > 0:
+                text = f"Автоигра: первый выстрел через {left:.0f} с — убери руку с мыши."
+            else:
+                res = ap.results
+                text = (f"Автоигра · выстрелов {ap.shots}: ранил {res[HIT]}, убил {res[SUNK]}, мимо {res[MISS]}"
+                        f" · {ap.note}  Двинь мышь — пауза.")
+            self.auto_info.setText(text)
+            self.auto_info.show()
+        elif ap.note:
+            self.auto_info.setText(ap.note)
+            self.auto_info.show()
+        else:
+            self.auto_info.hide()
+
+    def _auto_seen(self):
+        if not self.calibrated or self.last_frame is None:
+            return Seen(ready=False, states=None)
+        st = self.tracker.states.copy()
+        a = self.analysis
+        fresh = (a is not None and self.analysis_src is not None and a.states.shape == st.shape
+                 and np.array_equal(self.analysis_src, st))
+        busy = bool((self.tracker.pending >= 0).any()) or self.last_status not in ("ok",)
+        now = time.monotonic()
+        if not busy:
+            self._busy_since = None
+        elif self._busy_since is None:
+            self._busy_since = now
+        elif now - self._busy_since > 4.0:
+            busy = False                     # «вечная» анимация на поле не должна остановить игру навсегда
+        ready = not self.paused and not self.lost and self.frame_source is None
+        stuck = ""
+        if fresh and a.best is None and a.mode != "done":
+            stuck = "решатель не находит подходящих клеток — проверь отметки на поле помощника."
+        return Seen(ready=ready, states=st, best=a.best if fresh else None, fresh=fresh,
+                    done=bool(fresh and a.mode == "done"), busy=busy, stuck=stuck)
+
+    def auto_tick(self):
+        ap = self.autopilot
+        if not ap.active:
+            self.auto_timer.stop()
+            self._sync_auto_ui()
+            return
+        now = time.monotonic()
+        if self._auto_cursor is not None:
+            p = self.mouse.pos()
+            if p is not None and max(abs(p[0] - self._auto_cursor[0]), abs(p[1] - self._auto_cursor[1])) > 8:
+                self.stop_auto("Ты двинул мышь — автоигра на паузе. Продолжить: «▶ Авто» или Ctrl+Alt+A.")
+                return
+        if self.lost >= 15:
+            self.stop_auto("Автоигра выключена: поле давно не видно.")
+            return
+        cell = ap.step(now, self._auto_seen())
+        if cell is not None:
+            self._auto_click(*cell)
+        if ap.active:
+            self._sync_auto_ui(now)
+        else:
+            self.stop_auto(ap.note)
+
+    def _own_windows_at(self, lp):
+        for w in (self, self.debug):
+            if w.isVisible() and not w.isMinimized() and w.frameGeometry().contains(lp):
+                return w
+        return None
+
+    def _auto_click(self, r, c):
+        g = self.enemy_geom
+        smap = capture.ScreenMap(self.screen_, (self.last_frame.width(), self.last_frame.height()))
+        x, y = g.cell_center(r, c)
+        lp = smap.to_logical(x, y).toPoint()
+        if self._own_windows_at(lp) is not None:
+            self.stop_auto("Окно помощника закрывает поле соперника — отодвинь его и включи автоигру снова.")
+            return False
+        nx, ny = smap.to_native(x, y)
+        orig = self.mouse.pos()
+        if self.mouse.real:
+            # сверка: курсор, поставленный по физическим координатам, глазами Qt должен оказаться
+            # над той же клеткой (иначе что-то с масштабом экрана — лучше не щёлкать вслепую)
+            self.mouse.move(nx, ny)
+            qx, qy = smap.to_image(QCursor.pos())
+            err = max(abs(qx - x), abs(qy - y))
+            if err > max(4.0, 0.3 * min(g.cw, g.ch)):
+                if orig is not None:
+                    self.mouse.move(*orig)
+                self.stop_auto(f"Не получается точно навести мышь на клетку (промах {err:.0f} px). "
+                               "Напиши разработчику, какой у тебя масштаб экрана в Windows.")
+                return False
+        ok = self.mouse.click(nx, ny)
+        park = self._auto_park(smap, orig)
+        if park is not None:
+            self.mouse.move(*park)
+        self._auto_cursor = self.mouse.pos() or park or (nx, ny)
+        self.auto_log.append((round(time.monotonic(), 2), (r, c), (nx, ny), bool(ok)))
+        self.auto_log = self.auto_log[-300:]
+        if not ok:
+            self.stop_auto("Windows не дала щёлкнуть мышью (окно игры запущено от администратора?).")
+        return ok
+
+    def _auto_park(self, smap, orig):
+        """Куда убрать курсор после выстрела: туда, где он был, если это не над полем соперника
+        (над полем курсор мешает распознаванию), иначе — рядом с полем."""
+        g = self.enemy_geom
+        box = (g.x0 - 0.5 * g.cw, g.y0 - 0.5 * g.ch, g.x0 + g.width + 0.5 * g.cw, g.y0 + g.height + 0.5 * g.ch)
+
+        def over_board(ix, iy):
+            return box[0] <= ix <= box[2] and box[1] <= iy <= box[3]
+
+        if orig is not None:
+            ix, iy = smap.native_to_image(*orig)
+            if not over_board(ix, iy):
+                return orig
+        w, h = self.last_frame.width(), self.last_frame.height()
+        cx, cy = g.x0 + g.width / 2, g.y0 + g.height / 2
+        for ix, iy in ((g.x0 + g.width + 1.5 * g.cw, cy), (g.x0 - 1.5 * g.cw, cy),
+                       (cx, g.y0 + g.height + 1.5 * g.ch), (cx, g.y0 - 1.5 * g.ch)):
+            if 0 <= ix < w and 0 <= iy < h and not over_board(ix, iy):
+                return smap.to_native(ix, iy)
+        return None

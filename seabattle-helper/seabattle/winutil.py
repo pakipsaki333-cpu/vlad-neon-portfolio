@@ -15,6 +15,7 @@ HOTKEYS = {
     2: ("O", "Подсказка поверх игры вкл/выкл"),
     3: ("N", "Новая партия"),
     4: ("R", "Найти поле заново"),
+    5: ("A", "Автоигра: старт/стоп"),
 }
 
 
@@ -111,3 +112,38 @@ def make_click_through(hwnd: int) -> None:
              style | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)
     except Exception:
         pass
+
+
+def monitor_rects() -> dict:
+    """{имя монитора (как QScreen.name()): (left, top, right, bottom)} в физических пикселях."""
+    if not IS_WIN:
+        return {}
+    out = {}
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+
+        class MONITORINFOEXW(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT),
+                        ("dwFlags", wintypes.DWORD), ("szDevice", wintypes.WCHAR * 32)]
+
+        proc_t = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HMONITOR, wintypes.HDC,
+                                    ctypes.POINTER(wintypes.RECT), wintypes.LPARAM)
+        user32.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.POINTER(MONITORINFOEXW)]
+        user32.GetMonitorInfoW.restype = wintypes.BOOL
+        user32.EnumDisplayMonitors.argtypes = [wintypes.HDC, ctypes.c_void_p, proc_t, wintypes.LPARAM]
+        user32.EnumDisplayMonitors.restype = wintypes.BOOL
+
+        def cb(hmon, hdc, lprect, lparam):
+            mi = MONITORINFOEXW()
+            mi.cbSize = ctypes.sizeof(MONITORINFOEXW)
+            if user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+                r = mi.rcMonitor
+                out[mi.szDevice] = (r.left, r.top, r.right, r.bottom)
+            return True
+
+        user32.EnumDisplayMonitors(None, None, proc_t(cb), 0)
+    except Exception:
+        return {}
+    return out

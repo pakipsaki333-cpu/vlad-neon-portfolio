@@ -79,8 +79,19 @@ def letters_for(style: str = "ru") -> str:
     return RU_LETTERS if style == "ru" else LAT_LETTERS
 
 
-def coord_name(r: int, c: int, style: str = "ru") -> str:
-    """(строка, столбец) → «Д5»."""
+# Как подписаны клетки на сайте
+LETTERS_TOP = "letters_top"      # классика: буквы над полем, цифры слева — «Д5» = столбец Д, строка 5
+NUMBERS_TOP = "numbers_top"      # цифры над полем, буквы сбоку (Яндекс Игры) — «Д5» = строка Д, столбец 5
+LAYOUT_LABELS = {
+    LETTERS_TOP: "Буквы сверху, цифры слева",
+    NUMBERS_TOP: "Цифры сверху, буквы сбоку (Яндекс Игры)",
+}
+
+
+def coord_name(r: int, c: int, style: str = "ru", layout: str = LETTERS_TOP) -> str:
+    """(строка, столбец) → «Д5». Буква всегда первая — так клетки называют по-русски."""
+    if layout == NUMBERS_TOP:
+        return f"{letters_for(style)[r]}{c + 1}"
     return f"{letters_for(style)[c]}{r + 1}"
 
 

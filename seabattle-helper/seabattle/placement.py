@@ -7,7 +7,7 @@ from functools import lru_cache
 import numpy as np
 
 from .board import comp_shape, ring_cells, validate_layout
-from .rules import SHIP_NAMES, Rules, coord_name
+from .rules import LETTERS_TOP, SHIP_NAMES, Rules, coord_name
 from .solver import analyze, random_layout, sample_layouts
 
 STRATEGIES = {
@@ -129,28 +129,27 @@ def predictability(ships, rules: Rules) -> float:
     return float(np.clip(50.0 + 50.0 * z / 2.5, 0, 100))
 
 
-def describe(ships, letters: str = "ru"):
+def _ship_pos(s, letters, layout):
+    s = sorted(s)
+    if len(s) == 1:
+        return coord_name(*s[0], letters, layout)
+    return f"{coord_name(*s[0], letters, layout)}–{coord_name(*s[-1], letters, layout)}"
+
+
+def describe(ships, letters: str = "ru", layout: str = LETTERS_TOP):
     """Человеческое описание: «четырёхпалубный: А1–Г1»."""
     lines = []
     for s in ships:
-        s = sorted(s)
         name = SHIP_NAMES.get(len(s), f"{len(s)}-палубный")
-        if len(s) == 1:
-            pos = coord_name(*s[0], letters)
-        else:
-            pos = f"{coord_name(*s[0], letters)}–{coord_name(*s[-1], letters)}"
-        lines.append(f"{name}: {pos}")
+        lines.append(f"{name}: {_ship_pos(s, letters, layout)}")
     return lines
 
 
-def describe_short(ships, letters: str = "ru") -> str:
+def describe_short(ships, letters: str = "ru", layout: str = LETTERS_TOP) -> str:
     """Компактно: «4: К7–К10 · 3: К1–К3, А4–А6 · …»."""
     by_len = {}
     for s in ships:
-        s = sorted(s)
-        pos = coord_name(*s[0], letters) if len(s) == 1 else \
-            f"{coord_name(*s[0], letters)}–{coord_name(*s[-1], letters)}"
-        by_len.setdefault(len(s), []).append(pos)
+        by_len.setdefault(len(s), []).append(_ship_pos(s, letters, layout))
     return "  ·  ".join(f"<b>{L}</b>: " + ", ".join(v) for L, v in sorted(by_len.items(), reverse=True))
 
 

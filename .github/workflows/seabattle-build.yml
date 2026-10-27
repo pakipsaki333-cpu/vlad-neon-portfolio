@@ -56,6 +56,8 @@ jobs:
         run: python -m pytest -q
       - name: Самопроверка из исходников (захват экрана, распознавание, подсказки)
         run: python -m seabattle --selftest selftest_src
+      - name: Самопроверка автоигры из исходников (настоящие щелчки мыши, ход соперника)
+        run: python -m seabattle --selftest selftest_auto --auto
       - name: Иконка
         shell: pwsh
         run: |
@@ -70,16 +72,29 @@ jobs:
           Get-Content selftest_exe/report.json
           "Размер exe: {0:N1} МБ" -f ((Get-Item dist/SeaBattleHelper.exe).Length / 1MB)
           exit $p.ExitCode
+      - name: Самопроверка автоигры в собранном exe
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist/SeaBattleHelper.exe" -ArgumentList "--selftest", "selftest_exe_auto", "--auto" -Wait -PassThru
+          Get-Content selftest_exe_auto/report.json
+          exit $p.ExitCode
       - name: Итоги самопроверки (аннотации)
         if: always()
         shell: pwsh
         run: |
-          foreach ($d in "selftest_src", "selftest_exe") {
+          foreach ($d in "selftest_src", "selftest_auto", "selftest_exe", "selftest_exe_auto") {
             $f = Join-Path $d "report.json"
             if (Test-Path $f) {
               $r = Get-Content $f -Raw -Encoding utf8 | ConvertFrom-Json
               $scr = ($r.screens | ForEach-Object { "$($_.geometry -join 'x')@$($_.dpr)" }) -join ", "
-              Write-Output "::notice title=Самопроверка $d::ok=$($r.ok) mode=$($r.mode) won=$($r.won) shots=$($r.shots) max_lag=$($r.max_lag_s)s time=$($r.elapsed_s)s grids=$($r.grids_on_screen) screens=$scr errors=$($r.errors.Count) hidden_api=$($r.capture_hidden_main)/$($r.capture_hidden_overlay) main_in_capture=$($r.main_window_in_capture) diff=$($r.main_window_pixels_diff)"
+              $auto = ""
+              if ($r.auto) {
+                $a = $r.auto
+                $auto = " auto: mouse=$($a.mouse) clicks=$($a.clicks) answered=$($a.answered) ignored=$($a.ignored_by_practice) board_clicks=$($a.board_clicks) mismatch=$($a.click_cell_mismatch) native=$($a.native_origin -join ',') qt=$($a.qt_origin -join ',') note=$($a.note)"
+              }
+              $err = ""
+              if ($r.errors.Count) { $err = " first_error=" + (($r.errors[0] -replace "[`r`n]+", " ") -replace "::", ": ") }
+              Write-Output "::notice title=Самопроверка $d::v$($r.version) ok=$($r.ok) mode=$($r.mode) won=$($r.won) shots=$($r.shots) max_lag=$($r.max_lag_s)s time=$($r.elapsed_s)s grids=$($r.grids_on_screen) screens=$scr errors=$($r.errors.Count) hidden_api=$($r.capture_hidden_main)/$($r.capture_hidden_overlay) main_in_capture=$($r.main_window_in_capture) diff=$($r.main_window_pixels_diff)$auto$err"
             } else {
               Write-Output "::warning title=Самопроверка $d::report.json не найден"
             }
@@ -101,7 +116,9 @@ jobs:
           name: selftest-reports
           path: |
             seabattle-helper/selftest_src
+            seabattle-helper/selftest_auto
             seabattle-helper/selftest_exe
+            seabattle-helper/selftest_exe_auto
           if-no-files-found: ignore
 
   release-asset:

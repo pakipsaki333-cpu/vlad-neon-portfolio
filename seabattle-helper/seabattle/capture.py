@@ -49,8 +49,33 @@ def rgb_to_qimage(arr: np.ndarray) -> QImage:
     return img.copy()
 
 
+def native_origin(screen) -> tuple:
+    """Левый верхний угол экрана в физических пикселях рабочего стола (для щелчков мышью).
+
+    Qt 6 хранит у экрана «родной» левый верхний угол, а размер — в логических единицах,
+    так что обычно это просто geometry().topLeft(). В Windows сверяемся с самой системой.
+    """
+    from . import winutil
+    g = screen.geometry()
+    rects = winutil.monitor_rects()
+    r = rects.get(screen.name())
+    if r is None and rects:
+        # имя не совпало (Qt может звать монитор «по-человечески») — ищем по размеру и положению
+        dpr = screen.devicePixelRatio() or 1.0
+        w, h = g.width() * dpr, g.height() * dpr
+
+        def score(m):
+            return (abs((m[2] - m[0]) - w) + abs((m[3] - m[1]) - h) > 4,
+                    abs(m[0] - g.x()) + abs(m[1] - g.y()))
+        r = min(rects.values(), key=score)
+    if r is not None:
+        return float(r[0]), float(r[1])
+    return float(g.x()), float(g.y())
+
+
 class ScreenMap:
-    """Пересчёт координат: пиксели снимка экрана ↔ логические координаты Qt (с учётом масштаба)."""
+    """Пересчёт координат: пиксели снимка экрана ↔ логические координаты Qt (с учётом масштаба)
+    ↔ физические координаты рабочего стола (куда щёлкает автоигра)."""
 
     def __init__(self, screen, image_size):
         self.screen = screen
@@ -58,6 +83,22 @@ class ScreenMap:
         self.origin = QPointF(g.x(), g.y())
         self.kx = g.width() / max(1, image_size[0])
         self.ky = g.height() / max(1, image_size[1])
+        self._native = None
+
+    @property
+    def native(self) -> tuple:
+        if self._native is None:
+            self._native = native_origin(self.screen)
+        return self._native
+
+    def to_native(self, x: float, y: float) -> tuple:
+        """Пиксель снимка → точка рабочего стола для SetCursorPos (снимок — в физических пикселях)."""
+        nx, ny = self.native
+        return int(round(nx + x)), int(round(ny + y))
+
+    def native_to_image(self, px: float, py: float) -> tuple:
+        nx, ny = self.native
+        return px - nx, py - ny
 
     def to_logical(self, x: float, y: float) -> QPointF:
         return QPointF(self.origin.x() + x * self.kx, self.origin.y() + y * self.ky)

@@ -33,10 +33,12 @@ def main_gui():
 
 
 # ---------------------------------------------------------------------------- самопроверка
-def run_selftest(out_dir: str, max_seconds: float = 170.0) -> int:
+def run_selftest(out_dir: str, max_seconds: float = 170.0, auto: bool = False) -> int:
     """Тренировочная партия: помощник распознаёт поле с экрана и доигрывает её по своим подсказкам.
 
-    Выстрелы делаются через внутренний метод тренировки (никакой эмуляции мыши).
+    Обычный режим: выстрелы — через внутренний метод тренировки (без мыши).
+    auto=True: играет автоигра — настоящими щелчками мыши (Windows, SendInput), а тренировка
+    после каждого промаха «отдаёт ход сопернику» на секунду и не принимает щелчки.
     Пишет report.json и скриншоты. Код возврата 0 — всё в порядке.
     """
     os.makedirs(out_dir, exist_ok=True)
@@ -45,10 +47,11 @@ def run_selftest(out_dir: str, max_seconds: float = 170.0) -> int:
     os.environ["XDG_CONFIG_HOME"] = tmp
     app = _qt_app()
     import numpy as np
-    from PySide6.QtCore import QRect, QTimer
-    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, Qt, QTimer
+    from PySide6.QtGui import QGuiApplication, QMouseEvent
+    from PySide6.QtWidgets import QApplication
 
-    from . import capture
+    from . import capture, mouse as mouse_mod
     from .icon import app_icon, save_ico
     from .rules import HIT, SUNK, Rules
     from .settings import Settings
@@ -56,8 +59,9 @@ def run_selftest(out_dir: str, max_seconds: float = 170.0) -> int:
     from .ui.practice import PracticeWindow
     from .vision import find_grids
 
-    report = {"ok": False, "mode": None, "shots": 0, "won": False, "errors": [],
-              "max_lag_s": 0.0, "platform": sys.platform, "screens": []}
+    from . import __version__
+    report = {"ok": False, "version": __version__, "mode": None, "shots": 0, "won": False, "errors": [],
+              "max_lag_s": 0.0, "platform": sys.platform, "screens": [], "auto": None}
     for s in QGuiApplication.screens():
         g = s.geometry()
         report["screens"].append({"name": s.name(), "geometry": [g.x(), g.y(), g.width(), g.height()],
@@ -79,8 +83,27 @@ def run_selftest(out_dir: str, max_seconds: float = 170.0) -> int:
     practice.move(scr.x() + 20, scr.y() + 40)
     practice.show()
 
+    if auto:
+        practice.opp_turn.setChecked(True)          # после промаха — секунда «хода соперника»
+        practice.opponent_delay = 1.0
+        if not win.mouse.available:
+            # не Windows: «щелчки» — это события мыши Qt прямо в поле тренировки
+            def fake_click(x, y):
+                b = practice.board
+                local = b.mapFromGlobal(QPoint(x, y))
+                if not b.rect().contains(local):
+                    return
+                for et in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease):
+                    ev = QMouseEvent(et, QPointF(local), QPointF(x, y), Qt.LeftButton,
+                                     Qt.LeftButton if et == QEvent.MouseButtonPress else Qt.NoButton,
+                                     Qt.NoModifier)
+                    QApplication.sendEvent(b, ev)
+            win.mouse = mouse_mod.FakeMouse(fake_click)
+        report["auto"] = {"mouse": type(win.mouse).__name__}
+
     t_start = time.time()
-    state = {"phase": "calibrate", "since_sync": time.time(), "shot_taken_at": None, "shots": 0}
+    state = {"phase": "calibrate", "since_sync": time.time(), "shot_taken_at": None, "shots": 0,
+             "unsynced_since": None}
 
     def capture_hiding_check():
         """Видно ли окно помощника на снимке экрана (при скрытии от захвата — не должно)."""
@@ -114,12 +137,38 @@ def run_selftest(out_dir: str, max_seconds: float = 170.0) -> int:
         report["shots"] = practice.ref.shots
         report["won"] = practice.ref.done
         report["elapsed_s"] = round(time.time() - t_start, 1)
+        if auto:
+            ap = win.autopilot
+            targets = [t[1] for t in win.auto_log]
+            got_clicks = list(practice.board.clicks)
+            report["auto"].update({
+                "clicks": ap.clicks, "answered": ap.shots, "note": ap.note,
+                "ignored_by_practice": practice.ignored_clicks,
+                "board_clicks": len(got_clicks),
+                "click_cell_mismatch": sum(1 for a, b in zip(targets, got_clicks) if tuple(a) != tuple(b))
+                + abs(len(targets) - len(got_clicks)),
+                "first_clicks": [[list(t[1]), list(t[2])] for t in win.auto_log[:3]],
+            })
+            try:
+                ps = practice.screen() or QGuiApplication.primaryScreen()
+                g = ps.geometry()
+                report["auto"]["qt_origin"] = [g.x(), g.y()]
+                report["auto"]["native_origin"] = list(capture.native_origin(ps))
+                from . import winutil
+                report["auto"]["screen_name"] = ps.name()
+                report["auto"]["monitors"] = {k: list(v) for k, v in winutil.monitor_rects().items()}
+            except Exception as ex:
+                report["errors"].append(f"origin: {ex}")
+            if report["auto"]["click_cell_mismatch"]:
+                report["errors"].append("автоигра щёлкнула не в ту клетку: "
+                                        f"{targets[:5]} vs {got_clicks[:5]}")
         report["ok"] = bool(report["won"] and ok_extra and not report["errors"])
         with open(os.path.join(out_dir, "report.json"), "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
         print(json.dumps(report, ensure_ascii=False))
         timer.stop()
         win.timer.stop()
+        win.auto_timer.stop()
         win.worker.stop()
         app.exit(0 if report["ok"] else 1)
 
@@ -168,6 +217,16 @@ def run_selftest(out_dir: str, max_seconds: float = 170.0) -> int:
                     return
                 state["phase"] = "play"
                 state["since_sync"] = time.time()
+                if auto:
+                    if report["mode"] != "screen":
+                        report["errors"].append("автоигре нужен настоящий захват экрана")
+                        finish(False)
+                        return
+                    win.autopilot.first_delay = 0.6
+                    win.s.auto_delay = 0.3
+                    if not win.start_auto():
+                        report["errors"].append("автоигра не включилась: " + win.auto_info.text())
+                        finish(False)
                 return
             ref = practice.ref
             if ref.done:
@@ -175,6 +234,28 @@ def run_selftest(out_dir: str, max_seconds: float = 170.0) -> int:
                 return
             truth = ref.states
             got = win.current_states()
+            if auto:
+                synced = np.array_equal(np.where(truth == SUNK, HIT, truth), np.where(got == SUNK, HIT, got))
+                if synced:
+                    state["unsynced_since"] = None
+                else:
+                    if state["unsynced_since"] is None:
+                        state["unsynced_since"] = time.time()
+                    lag = time.time() - state["unsynced_since"]
+                    report["max_lag_s"] = max(report["max_lag_s"], round(lag, 2))
+                    if lag > 8:
+                        bad = np.argwhere(np.where(truth == SUNK, HIT, truth) != np.where(got == SUNK, HIT, got))
+                        report["errors"].append(f"распознавание отстало: клетки {bad.tolist()[:6]}")
+                        finish(False)
+                        return
+                if ref.shots == 20 and not state.get("mid_saved"):
+                    state["mid_saved"] = True
+                    win.grab().save(os.path.join(out_dir, "helper_midgame.png"))
+                    capture.grab_screen(practice.screen()).save(os.path.join(out_dir, "screen_midgame.png"))
+                if not win.autopilot.active:
+                    report["errors"].append("автоигра остановилась: " + win.autopilot.note)
+                    finish(False)
+                return
             synced = np.array_equal(np.where(truth == SUNK, HIT, truth), np.where(got == SUNK, HIT, got))
             if not synced:
                 lag = time.time() - state["since_sync"]
@@ -211,6 +292,8 @@ def run_selftest(out_dir: str, max_seconds: float = 170.0) -> int:
 def main():
     ap = argparse.ArgumentParser(prog="seabattle", description="Помощник для морского боя")
     ap.add_argument("--selftest", metavar="ПАПКА", help="самопроверка с отчётом и скриншотами")
+    ap.add_argument("--auto", action="store_true",
+                    help="самопроверка автоигры: настоящие щелчки мыши по полю тренировки")
     ap.add_argument("--make-icon", metavar="ФАЙЛ.ico", help="сохранить иконку для сборки exe")
     args = ap.parse_args()
     if args.make_icon:
@@ -218,7 +301,7 @@ def main():
         from .icon import save_ico
         return 0 if save_ico(args.make_icon) else 1
     if args.selftest:
-        return run_selftest(args.selftest)
+        return run_selftest(args.selftest, auto=args.auto)
     return main_gui()
 
 
