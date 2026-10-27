@@ -42,6 +42,18 @@ def run_selftest(out_dir: str, max_seconds: float = 170.0, auto: bool = False) -
     Пишет report.json и скриншоты. Код возврата 0 — всё в порядке.
     """
     os.makedirs(out_dir, exist_ok=True)
+    # Если что-то повиснет (например, модальное окно или бесконечный цикл), через max_seconds+30 с
+    # стеки всех потоков окажутся в hang.txt, и процесс завершится — а не будет ждать до таймаута CI.
+    import faulthandler
+    hang_file = open(os.path.join(out_dir, "hang.txt"), "w", encoding="utf-8")
+    faulthandler.dump_traceback_later(max_seconds + 30, exit=True, file=hang_file)
+    progress = open(os.path.join(out_dir, "progress.log"), "w", encoding="utf-8")
+    t_log0 = time.time()
+
+    def log(msg):
+        progress.write(f"{time.time() - t_log0:7.2f} {msg}\n")
+        progress.flush()
+
     tmp = tempfile.mkdtemp(prefix="seabattle_selftest_")
     os.environ["APPDATA"] = tmp                 # не трогаем настройки пользователя
     os.environ["XDG_CONFIG_HOME"] = tmp
@@ -100,6 +112,15 @@ def run_selftest(out_dir: str, max_seconds: float = 170.0, auto: bool = False) -
                     QApplication.sendEvent(b, ev)
             win.mouse = mouse_mod.FakeMouse(fake_click)
         report["auto"] = {"mouse": type(win.mouse).__name__}
+        orig_auto_click = win._auto_click
+
+        def logged_click(*args):
+            log(f"click args={args} cursor={win.mouse.pos()}")
+            ok = orig_auto_click(*args)
+            log(f"  -> ok={ok} cursor={win.mouse.pos()} note={win.autopilot.note!r}")
+            return ok
+        win._auto_click = logged_click
+    log(f"start auto={auto} mouse={type(win.mouse).__name__}")
 
     t_start = time.time()
     state = {"phase": "calibrate", "since_sync": time.time(), "shot_taken_at": None, "shots": 0,
@@ -128,6 +149,28 @@ def run_selftest(out_dir: str, max_seconds: float = 170.0, auto: bool = False) -
             report["errors"].append(f"capture hiding check: {ex}")
 
     def finish(ok_extra=True):
+        if state.get("finished"):
+            return
+        state["finished"] = True
+        try:
+            _finish(ok_extra)
+        except Exception:
+            report["errors"].append("finish: " + traceback.format_exc())
+            report["ok"] = False
+            try:
+                with open(os.path.join(out_dir, "report.json"), "w", encoding="utf-8") as f:
+                    json.dump(report, f, ensure_ascii=False, indent=2, default=str)
+            except Exception:
+                pass
+        finally:
+            log(f"finish ok={report.get('ok')} errors={len(report['errors'])}")
+            timer.stop()
+            win.timer.stop()
+            win.auto_timer.stop()
+            win.worker.stop()
+            app.exit(0 if report.get("ok") else 1)
+
+    def _finish(ok_extra=True):
         capture_hiding_check()
         try:
             win.grab().save(os.path.join(out_dir, "helper_final.png"))
@@ -164,13 +207,11 @@ def run_selftest(out_dir: str, max_seconds: float = 170.0, auto: bool = False) -
                                         f"{targets[:5]} vs {got_clicks[:5]}")
         report["ok"] = bool(report["won"] and ok_extra and not report["errors"])
         with open(os.path.join(out_dir, "report.json"), "w", encoding="utf-8") as f:
-            json.dump(report, f, ensure_ascii=False, indent=2)
-        print(json.dumps(report, ensure_ascii=False))
-        timer.stop()
-        win.timer.stop()
-        win.auto_timer.stop()
-        win.worker.stop()
-        app.exit(0 if report["ok"] else 1)
+            json.dump(report, f, ensure_ascii=False, indent=2, default=str)
+        try:
+            print(json.dumps(report, ensure_ascii=False, default=str))
+        except Exception:                    # exe без консоли: печатать некуда
+            pass
 
     def calibrate():
         # 1) настоящий захват экрана
@@ -229,6 +270,13 @@ def run_selftest(out_dir: str, max_seconds: float = 170.0, auto: bool = False) -
                         finish(False)
                 return
             ref = practice.ref
+            now = time.time()
+            if now - state.get("logged_at", 0) >= 1.0:
+                state["logged_at"] = now
+                ap = win.autopilot
+                log(f"shots={ref.shots} done={ref.done} busy={practice.busy} track={win.last_status} "
+                    f"lost={win.lost} paused={win.paused} analysis={'yes' if win.analysis is not None else 'no'} "
+                    f"auto={ap.phase} clicks={ap.clicks} answered={ap.shots} note={ap.note!r}")
             if ref.done:
                 finish(True)
                 return
@@ -286,7 +334,19 @@ def run_selftest(out_dir: str, max_seconds: float = 170.0, auto: bool = False) -
     timer = QTimer()
     timer.timeout.connect(tick)
     QTimer.singleShot(1500, lambda: timer.start(150))
-    return app.exec()
+    code = app.exec()
+    log(f"exit code={code}")
+    faulthandler.cancel_dump_traceback_later()
+    progress.close()
+    hang_file.close()
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except Exception:
+            pass
+    # Выходим сразу, без разборки объектов Qt: самопроверке она не нужна, а на CI зависание или
+    # падение при выходе выглядело бы как провал проверки.
+    os._exit(code)
 
 
 def main():

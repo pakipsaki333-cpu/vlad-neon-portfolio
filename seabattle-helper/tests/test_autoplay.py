@@ -128,7 +128,10 @@ def _qt_app():
     pytest.importorskip("PySide6")
     if not sys.platform.startswith("win") and not os.environ.get("DISPLAY"):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtWidgets import QApplication
+    try:
+        from PySide6.QtWidgets import QApplication
+    except ImportError as ex:                 # нет системных библиотек Qt (голый Linux-сервер)
+        pytest.skip(f"Qt недоступен: {ex}")
     return QApplication.instance() or QApplication([])
 
 
@@ -220,6 +223,55 @@ def test_autoplay_clicks_the_right_cells_and_waits_out_opponent_turn(tmp_path, m
         assert ap.clicks == practice.ref.shots + practice.ignored_clicks
     finally:
         win.stop_auto()
+        win.timer.stop()
+        win.worker.stop()
+        for w in (win.overlay, win.ghost, win.debug, practice, win):
+            w.hide()
+        app.processEvents()
+
+
+def test_restored_board_position_is_rechecked(tmp_path, monkeypatch):
+    """Поле из настроек (например, запомненное версией 1.0 со сдвигом на клетку) при запуске
+    сверяется с экраном и поправляется."""
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    app = _qt_app()
+    from PySide6.QtGui import QGuiApplication
+
+    from seabattle import capture
+    from seabattle.rules import Rules
+    from seabattle.settings import Settings
+    from seabattle.ui.main_window import MainWindow
+    from seabattle.ui.practice import PracticeWindow
+    from seabattle.vision import find_grids
+
+    st = Settings()
+    st.first_run = False
+    st.hide_from_capture = False
+    st.interval_ms = 150
+    win = MainWindow(st)
+    practice = PracticeWindow(Rules())
+    try:
+        scr = QGuiApplication.primaryScreen().availableGeometry()
+        practice.move(scr.x() + 10, scr.y() + 10)
+        practice.show()
+        win.move(scr.x() + practice.width() + 60, scr.y() + 10)
+        win.show()
+        _wait(app, lambda: False, 0.8)
+        ps = QGuiApplication.primaryScreen()
+        img = capture.grab_screen(ps)
+        smap = capture.ScreenMap(ps, (img.width(), img.height()))
+        b = practice.board
+        cx, cy = smap.to_image(b.mapToGlobal(b.rect().center()))
+        true = [g for g in find_grids(capture.qimage_to_rgb(img))
+                if g.x0 <= cx <= g.x0 + g.width and g.y0 <= cy <= g.y0 + g.height]
+        if not true:
+            pytest.skip("на этой системе снимок экрана не показывает окна")
+        g = true[0]
+        win.apply_calibration(ps, g.shifted(g.cw, 0), None, None)     # как будто из настроек
+        assert _wait(app, lambda: abs(win.enemy_geom.x0 - g.x0) < 2, 5), (win.enemy_geom, g)
+        assert abs(win.enemy_geom.y0 - g.y0) < 2
+    finally:
         win.timer.stop()
         win.worker.stop()
         for w in (win.overlay, win.ghost, win.debug, practice, win):

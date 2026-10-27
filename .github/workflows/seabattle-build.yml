@@ -55,8 +55,10 @@ jobs:
       - name: Тесты на Windows
         run: python -m pytest -q
       - name: Самопроверка из исходников (захват экрана, распознавание, подсказки)
+        timeout-minutes: 6
         run: python -m seabattle --selftest selftest_src
       - name: Самопроверка автоигры из исходников (настоящие щелчки мыши, ход соперника)
+        timeout-minutes: 6
         run: python -m seabattle --selftest selftest_auto --auto
       - name: Иконка
         shell: pwsh
@@ -66,6 +68,7 @@ jobs:
       - name: Сборка SeaBattleHelper.exe
         run: pyinstaller --noconfirm --clean --onefile --windowed --name SeaBattleHelper --icon build/icon.ico --exclude-module tkinter launcher.py
       - name: Самопроверка собранного exe
+        timeout-minutes: 6
         shell: pwsh
         run: |
           $p = Start-Process -FilePath "dist/SeaBattleHelper.exe" -ArgumentList "--selftest", "selftest_exe" -Wait -PassThru
@@ -73,6 +76,7 @@ jobs:
           "Размер exe: {0:N1} МБ" -f ((Get-Item dist/SeaBattleHelper.exe).Length / 1MB)
           exit $p.ExitCode
       - name: Самопроверка автоигры в собранном exe
+        timeout-minutes: 6
         shell: pwsh
         run: |
           $p = Start-Process -FilePath "dist/SeaBattleHelper.exe" -ArgumentList "--selftest", "selftest_exe_auto", "--auto" -Wait -PassThru
@@ -97,6 +101,17 @@ jobs:
               Write-Output "::notice title=Самопроверка $d::v$($r.version) ok=$($r.ok) mode=$($r.mode) won=$($r.won) shots=$($r.shots) max_lag=$($r.max_lag_s)s time=$($r.elapsed_s)s grids=$($r.grids_on_screen) screens=$scr errors=$($r.errors.Count) hidden_api=$($r.capture_hidden_main)/$($r.capture_hidden_overlay) main_in_capture=$($r.main_window_in_capture) diff=$($r.main_window_pixels_diff)$auto$err"
             } else {
               Write-Output "::warning title=Самопроверка $d::report.json не найден"
+            }
+            $h = Join-Path $d "hang.txt"
+            if ((Test-Path $h) -and ((Get-Item $h).Length -gt 0)) {
+              $t = (Get-Content $h -Raw -Encoding utf8) -replace "[`r`n]+", " | " -replace "::", ": "
+              if ($t.Length -gt 3000) { $t = $t.Substring(0, 3000) }
+              Write-Output "::warning title=Зависание $d::$t"
+            }
+            $pl = Join-Path $d "progress.log"
+            if (Test-Path $pl) {
+              $tail = ((Get-Content $pl -Encoding utf8 | Select-Object -Last 8) -join " | ") -replace "::", ": "
+              Write-Output "::notice title=Ход самопроверки $d::$tail"
             }
           }
           if (Test-Path dist/SeaBattleHelper.exe) {

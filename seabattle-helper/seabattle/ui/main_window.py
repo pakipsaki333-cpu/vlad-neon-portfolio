@@ -24,7 +24,7 @@ from ..rules import (HIT, LETTERS_TOP, MISS, NUMBERS_TOP, PRESETS, SHIP_NAMES, S
 from ..settings import Settings
 from ..solver import analyze
 from ..vision import (BoardTracker, GridGeom, border_signature, detect_label_layout, extract_patches,
-                      find_grids, signature_match)
+                      find_grids, refine_grid, signature_match)
 from ..icon import glyph_icon
 from . import theme
 from .grid_widget import BoardView
@@ -222,6 +222,7 @@ class MainWindow(QWidget):
         self.last_status = None              # что сказал трекер на последнем кадре
         self.label_layout_detected = None    # как подписаны клетки на сайте (узнаём по снимку)
         self._labels_pending = False
+        self._recheck_pending = False
         # автоигра
         self.mouse = mouse_mod.default_mouse()
         self.autopilot = AutoPilot(delay=self.s.auto_delay)
@@ -1074,6 +1075,7 @@ class MainWindow(QWidget):
         self.last_status = None
         self.label_layout_detected = None
         self._labels_pending = True
+        self._recheck_pending = img is None          # поле из настроек — сверим с экраном
         if img is not None:
             self._labels_pending = False
             self._set_detected_layout(self._detect_labels(img, enemy))
@@ -1129,6 +1131,9 @@ class MainWindow(QWidget):
         if img is None or img.isNull():
             return
         self.last_frame = img
+        if self._recheck_pending:
+            self._recheck_pending = False
+            self._recheck_geometry(img)
         g = self.enemy_geom
         m = int(max(g.cw, g.ch)) + 2
         crop = QRect(int(g.x0) - m, int(g.y0) - m, int(g.width) + 2 * m, int(g.height) + 2 * m)
@@ -1188,6 +1193,36 @@ class MainWindow(QWidget):
                                    f"Состояние: {mode}. Кадр обработан за {dt:.0f} мс. "
                                    f"Образцов обучения: {len(self.tracker.examples)}.")
         self.update_overlay()
+
+    def _recheck_geometry(self, img):
+        """После перезапуска поле берётся из настроек — сверяем его с экраном: версия 1.0 на
+        «тетрадных» сайтах (Яндекс Игры) могла запомнить поле со сдвигом на клетку."""
+        fixed = False
+        for attr in ("enemy_geom", "my_geom"):
+            g = getattr(self, attr)
+            if g is None:
+                continue
+            m = int(2.5 * max(g.cw, g.ch))
+            rect = QRect(int(g.x0) - m, int(g.y0) - m, int(g.width) + 2 * m, int(g.height) + 2 * m)
+            rect = rect.intersected(img.rect())
+            if rect.width() < g.width or rect.height() < g.height:
+                continue
+            try:
+                g2, conf = refine_grid(capture.qimage_to_rgb(img, rect), g.shifted(-rect.x(), -rect.y()))
+            except Exception:
+                continue
+            g2 = g2.shifted(rect.x(), rect.y())
+            moved = abs(g2.x0 - g.x0) > 0.3 * g.cw or abs(g2.y0 - g.y0) > 0.3 * g.ch
+            if conf > 0.3 and moved and abs(g2.cw - g.cw) < 0.1 * g.cw and abs(g2.ch - g.ch) < 0.1 * g.ch:
+                setattr(self, attr, g2)
+                fixed = True
+        if fixed:
+            self.s.enemy_geom = self.enemy_geom.to_dict()
+            self.s.my_geom = self.my_geom.to_dict() if self.my_geom is not None else None
+            self._later_save()
+            self.signature = None
+            self.set_status("ok", "Поправил положение поля по экрану — слежу.")
+        return fixed
 
     def _own_window_over_board(self):
         """Какое окно помощника лежит на поле соперника (None — никакое)."""
